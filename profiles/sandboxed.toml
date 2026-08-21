@@ -1,0 +1,36 @@
+# 沙箱验证 Profile（可选加固）。
+# 与 default 完全相同的工具链与覆盖策略，但强制在 bubblewrap 沙箱中执行：
+# 禁用网络、只读绑定产品源码、仅 run 目录可写，并施加 RSS/进程数/CPU 限制。
+# 使用前需要安装 bubblewrap（apt install bubblewrap），且内核支持 unprivileged
+# user namespaces。
+name = "sandboxed"
+backend = "local_linux"
+allowed_libraries = ["m"]
+
+[tools]
+clang = "clang"
+clangxx = "clang++"
+llvm_profdata = "llvm-profdata"
+llvm_cov = "llvm-cov"
+bubblewrap = "bwrap"
+
+[sandbox]
+required = true
+disable_network = true
+
+[resources]
+timeout_seconds = 660
+memory_mb = 2048
+cpu_seconds = 660
+process_count = 16
+max_commands = 16
+max_output_bytes = 1048576
+
+[coverage]
+require_target_function_hit = true
+min_libfuzzer_cov_delta = 0
+min_feature_delta = 0
+min_corpus_delta = 0
+min_target_line_delta = 0.0
+require_any_positive_growth = true
+min_execs_per_second = 0.0

@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+dist/
+build/
+*.egg-info/
+
+# Coverage
+.coverage
+htmlcov/
+
+# Runtime artifacts (per-run outputs and private model sessions)
+work/
+.private-sessions/
+evaluate-results.json
+
+# Tested target sources are supplied by the user, not part of the tool itself
+/repos/
+
+# Local environment and secrets
+.env
+.env.*
+*.profraw
+*.profdata

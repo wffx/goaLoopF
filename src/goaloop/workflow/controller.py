@@ -1,0 +1,275 @@
+"""RunController: the four-phase state machine with checkpointing and resume."""
+
+from __future__ import annotations
+
+import shutil
+import time
+from collections.abc import Callable
+from pathlib import Path
+from typing import Any
+
+from ..backend import ExecutionBackend
+from ..driver import GenerationDriver
+from ..models import (
+    CrashAnalysisResult,
+    FuzzRunRequest,
+    GenerationGoal,
+    HarnessExecutionResult,
+    ModelProfile,
+    Phase,
+    PreprocessResult,
+    RunEvent,
+    RunState,
+    TerminalStatus,
+    ValidationProfile,
+)
+from ..preprocess import preprocess_request
+from ..storage import ArtifactStore, create_run_id
+from .generation import GenerationMixin
+from .report import ReportMixin
+
+PREPROCESS_FILENAME = "preprocess.json"
+GOAL_FILENAME = "goal.json"
+EXECUTIONS_DIR = "executions"
+
+
+class RunController(GenerationMixin, ReportMixin):
+    """Drives one run to a terminal status, resuming from disk when asked."""
+
+    def __init__(
+        self,
+        *,
+        workspace_root: Path,
+        request: FuzzRunRequest,
+        profile: ValidationProfile,
+        driver: GenerationDriver,
+        backend: ExecutionBackend,
+        model_profile: ModelProfile | None = None,
+        run_id: str | None = None,
+        resume: bool = False,
+        on_event: Callable[[RunEvent], None] | None = None,
+    ) -> None:
+        self.workspace_root = workspace_root.resolve()
+        self.request = request
+        self.profile = profile
+        self.driver = driver
+        self.backend = backend
+        self.model_profile = model_profile
+        self.resume = resume
+        self.on_event = on_event
+
+        self.state: RunState | None = None
+        self.store: ArtifactStore | None = None
+        self.preprocess: PreprocessResult | None = None
+        self.goal: GenerationGoal | None = None
+        self.last_execution: HarnessExecutionResult | None = None
+        self.last_crash_analysis: CrashAnalysisResult | None = None
+        self._phase_started = time.monotonic()
+        self._phase_durations: dict[str, float] = {}
+        self._loop_hashes: dict[str, dict[str, str]] = {}
+        self._first_compile_success: bool | None = None
+        self._time_to_bug: float | None = None
+        self._resumed_run_id = run_id
+
+    # -- public -------------------------------------------------------------
+
+    def run(self) -> RunState:
+        if self.resume:
+            self._load_checkpoint()
+        else:
+            run_id = self._resumed_run_id or create_run_id()
+            self._create_initial_state(run_id)
+
+        while self.state is not None and self.state.terminal_status is None:
+            phase = self.state.phase
+            if phase is Phase.PREPROCESS:
+                self._preprocess_step()
+            elif phase is Phase.HARNESS_GENERATION:
+                self._generation_step()
+            elif phase is Phase.CRASH_ANALYSIS_REPORT:
+                self._report_step()
+                if self.state.phase is Phase.HARNESS_GENERATION:
+                    continue  # harness-owned crash returned to generation
+                break
+            else:  # pragma: no cover - defensive
+                self._terminate(TerminalStatus.FAILED, f"unexpected phase {phase}")
+                break
+
+        # Every terminal run must pass through the report phase exactly once.
+        if self.state is not None and self.state.terminal_status is not None:
+            if self.state.phase is not Phase.CRASH_ANALYSIS_REPORT:
+                self._enter_phase(Phase.CRASH_ANALYSIS_REPORT)
+            if self.store is None or not (self.store.run_dir / "validation.json").is_file():
+                self._report_step()
+        return self.state  # type: ignore[return-value]
+
+    def close(self) -> None:
+        self.driver.close()
+
+    # -- lifecycle helpers ---------------------------------------------------
+
+    def _create_initial_state(self, run_id: str) -> None:
+        goal = GenerationGoal(
+            run_id=run_id,
+            objective=(
+                f"generate a libFuzzer harness for {self.request.function} in "
+                f"{self.request.source} that compiles, executes, and reaches the target function"
+            ),
+            target_function=self.request.function,
+            acceptance_criteria=[
+                "candidate compiles with -fsanitize=fuzzer,address,undefined",
+                "candidate executes and hits the target function",
+                "coverage policy in the validation profile is satisfied",
+            ],
+            max_generation_loops=self.request.max_generation_loops,
+        )
+        self.state = RunState(
+            run_id=run_id,
+            project_name="unknown",
+            request=self.request,
+            phase=Phase.PREPROCESS,
+            goal=goal,
+        )
+        self.goal = goal
+        # Nothing is persisted until preprocess resolves the project name, so a
+        # crash during preprocess leaves no half-written run directory behind.
+
+    def _load_checkpoint(self) -> None:
+        if self._resumed_run_id is None:
+            raise ValueError("resume requires --run-id")
+        run_id = self._resumed_run_id
+        matches = sorted((self.workspace_root / "work").glob(f"*/runs/{run_id}"))
+        if not matches:
+            raise FileNotFoundError(f"run {run_id!r} was not found under work/")
+        run_dir = matches[0]
+        project_name = run_dir.parent.parent.name
+        self.store = ArtifactStore(self.workspace_root, project_name, run_id)
+        self.state = self.store.load_state()
+        self.goal = self.state.goal
+        preprocess_path = run_dir / PREPROCESS_FILENAME
+        if preprocess_path.is_file():
+            self.preprocess = PreprocessResult.model_validate_json(preprocess_path.read_text(encoding="utf-8"))
+        goal_path = run_dir / GOAL_FILENAME
+        if goal_path.is_file():
+            self.goal = GenerationGoal.model_validate_json(goal_path.read_text(encoding="utf-8"))
+            self.state.goal = self.goal
+        execution_path = self._last_execution_path(run_dir)
+        if execution_path is not None:
+            self.last_execution = HarnessExecutionResult.model_validate_json(execution_path.read_text(encoding="utf-8"))
+        crash_path = run_dir / "crash-analysis.json"
+        if crash_path.is_file():
+            self.last_crash_analysis = CrashAnalysisResult.model_validate_json(crash_path.read_text(encoding="utf-8"))
+        self._event("phase:resume", {"phase": self.state.phase.value})
+
+    def _save_checkpoint(self) -> None:
+        if self.state is None or self.store is None:
+            return
+        self.store.save_state(self.state)
+        if self.goal is not None:
+            self.store.write_json(self.store.run_dir / GOAL_FILENAME, self.goal)
+
+    def _event(self, kind: str, payload: dict[str, Any]) -> None:
+        if self.state is None or self.store is None:
+            return
+        event = RunEvent(
+            sequence=self.store.next_event_sequence(),
+            phase=self.state.phase,
+            kind=kind,
+            payload=payload,
+        )
+        self.store.append_event(event)
+        if self.on_event is not None:
+            self.on_event(event)
+
+    def _enter_phase(self, phase: Phase) -> None:
+        assert self.state is not None
+        elapsed = time.monotonic() - self._phase_started
+        self._phase_durations[self.state.phase.value] = round(elapsed, 3)
+        self._phase_started = time.monotonic()
+        self.state.phase = phase
+        self._event("phase:enter", {"phase": phase.value})
+        self._save_checkpoint()
+
+    def _terminate(self, status: TerminalStatus, reason: str) -> None:
+        assert self.state is not None
+        self.state.terminal_status = status
+        self._event("run:terminal", {"status": status.value, "reason": reason})
+        self._save_checkpoint()
+
+    def _persist_preprocess(self) -> None:
+        if self.store is not None and self.preprocess is not None:
+            assert self.state is not None
+            self.store.write_json(self.store.run_dir / PREPROCESS_FILENAME, self.preprocess)
+            self.state.preprocess_result_path = (
+                (self.store.run_dir / PREPROCESS_FILENAME).relative_to(self.store.run_dir).as_posix()
+            )
+
+    def _persist_execution(self, execution: HarnessExecutionResult) -> None:
+        assert self.store is not None and self.state is not None
+        path = self.store.run_dir / EXECUTIONS_DIR / f"loop-{execution.generation_loop:02d}" / "execution.json"
+        self.store.write_json(path, execution)
+        self.state.last_execution_path = path.relative_to(self.store.run_dir).as_posix()
+
+    def _last_execution_path(self, run_dir: Path) -> Path | None:
+        executions = run_dir / EXECUTIONS_DIR
+        if not executions.is_dir():
+            return None
+        candidates = sorted(executions.glob("loop-*/execution.json"))
+        return candidates[-1] if candidates else None
+
+    # -- phase: preprocess ---------------------------------------------------
+
+    def _preprocess_step(self) -> None:
+        assert self.state is not None
+        started = time.monotonic()
+        preprocess = preprocess_request(
+            self.workspace_root,
+            self.state.run_id,
+            self.request,
+            self.profile,
+        )
+        self.preprocess = preprocess
+        self.state.project_name = preprocess.project_name
+        self.store = ArtifactStore(self.workspace_root, preprocess.project_name, self.state.run_id)
+        self.store.initialize()
+        self._seed_corpus()
+        self._persist_preprocess()
+        self._event(
+            "preprocess:done",
+            {
+                "ready": preprocess.ready,
+                "status": preprocess.terminal_status.value if preprocess.terminal_status else None,
+                "reason": preprocess.reason,
+            },
+        )
+        self._phase_durations["preprocess"] = round(time.monotonic() - started, 3)
+        self._save_checkpoint()
+        if not preprocess.ready:
+            status = preprocess.terminal_status or TerminalStatus.FAILED
+            self._terminate(status, preprocess.reason or "preprocess did not produce a ready result")
+            self._enter_phase(Phase.CRASH_ANALYSIS_REPORT)
+            return
+        self._enter_phase(Phase.HARNESS_GENERATION)
+
+    def _seed_corpus(self) -> None:
+        """Copy user-provided seed inputs into the run's corpus before fuzzing."""
+        seed = self.request.seed_corpus
+        if seed is None or self.store is None:
+            return
+        seed_dir = seed.resolve()
+        if not seed_dir.is_dir():
+            self._event("corpus:seed", {"ok": False, "detail": f"seed corpus is not a directory: {seed_dir}"})
+            return
+        copied = 0
+        for item in sorted(seed_dir.iterdir()):
+            if item.is_file():
+                shutil.copy2(item, self.store.corpus_dir / item.name)
+                copied += 1
+        self._event("corpus:seed", {"ok": True, "copied": copied, "source": str(seed_dir)})
+
+    def _redacted_excerpt(self, excerpt: str | None) -> str | None:
+        if excerpt is None or self.preprocess is None:
+            return excerpt
+        from ..redaction import redact
+
+        return redact(excerpt, self.workspace_root)

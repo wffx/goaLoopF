@@ -1,0 +1,5 @@
+name = "default"
+provider = "deepseek-official"
+model = "deepseek-v4-pro"
+cordis = "cordis/goaloop.cordis.yml"
+

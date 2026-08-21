@@ -1,0 +1,37 @@
+# 默认验证 Profile。
+# 运行 libFuzzer harness 本身不需要沙箱：默认在本地直接执行，仅施加
+# 墙钟超时 + RLIMIT_CPU（内存由 libFuzzer -rss_limit_mb 约束，ASan 需要大
+# 虚拟地址空间，故不设 RLIMIT_AS）。
+# 沙箱（bubblewrap）是可选加固：如需启用，安装 bubblewrap 后使用
+# `profiles/sandboxed.toml`（或把本文件 [sandbox].required 改为 true）。
+name = "default"
+backend = "local_linux"
+allowed_libraries = ["m"]
+
+[tools]
+clang = "clang"
+clangxx = "clang++"
+llvm_profdata = "llvm-profdata"
+llvm_cov = "llvm-cov"
+bubblewrap = "bwrap"
+
+[sandbox]
+required = false
+disable_network = true
+
+[resources]
+timeout_seconds = 660
+memory_mb = 2048
+cpu_seconds = 660
+process_count = 16
+max_commands = 16
+max_output_bytes = 1048576
+
+[coverage]
+require_target_function_hit = true
+min_libfuzzer_cov_delta = 0
+min_feature_delta = 0
+min_corpus_delta = 0
+min_target_line_delta = 0.0
+require_any_positive_growth = true
+min_execs_per_second = 0.0

@@ -1,0 +1,91 @@
+# c-ares 1.11.0 专用验证 Profile。
+# 该老版本（2015）在 Linux 上直接编译需要 configure 阶段检测的构建知识：
+#   - HAVE_WRITEV=1：系统提供 writev()，避免 ares_writev.h 重定义 struct iovec
+#     （否则 ares_private.h -> ares_writev.h 报 redefinition of 'iovec'）。
+#   - ares_build.h：由用户从仓库的 ares_build.h.dist 复制到
+#     build-config/c-ares/ares_build.h（不修改 repos/），控制器附加 -I。
+# 其余项目遵循 default Profile（无沙箱、libm、相同覆盖策略）。
+name = "c-ares"
+backend = "local_linux"
+allowed_libraries = ["m"]
+default_defines = [
+  "CARES_STATICLIB=1",
+  "HAVE_AF_INET6=1",
+  "HAVE_ARPA_INET_H=1",
+  "HAVE_BOOL_T=1",
+  "HAVE_ERRNO_H=1",
+  "HAVE_FCNTL_H=1",
+  "HAVE_GETENV=1",
+  "HAVE_GETTIMEOFDAY=1",
+  "HAVE_IN_ADDR_T=1",
+  "HAVE_LIMITS_H=1",
+  "HAVE_NETDB_H=1",
+  "HAVE_NETINET_IN_H=1",
+  "HAVE_NETINET_TCP_H=1",
+  "HAVE_PF_INET6=1",
+  "HAVE_RECV=1",
+  "HAVE_SEND=1",
+  "HAVE_SIG_ATOMIC_T=1",
+  "HAVE_SSIZE_T=1",
+  "HAVE_STDBOOL_H=1",
+  "HAVE_STDLIB_H=1",
+  "HAVE_STRINGS_H=1",
+  "HAVE_STRING_H=1",
+  "HAVE_STRUCT_ADDRINFO=1",
+  "HAVE_STRUCT_IN6_ADDR=1",
+  "HAVE_STRUCT_IOVEC=1",
+  "HAVE_STRUCT_SOCKADDR_IN6=1",
+  "HAVE_STRUCT_SOCKADDR_STORAGE=1",
+  "HAVE_STRUCT_TIMEVAL=1",
+  "HAVE_SYS_IOCTL_H=1",
+  "HAVE_SYS_SELECT_H=1",
+  "HAVE_SYS_SOCKET_H=1",
+  "HAVE_SYS_STAT_H=1",
+  "HAVE_SYS_TIME_H=1",
+  "HAVE_SYS_TYPES_H=1",
+  "HAVE_SYS_UIO_H=1",
+  "HAVE_TIME_H=1",
+  "HAVE_UNISTD_H=1",
+  "HAVE_WRITEV=1",
+  "RECV_TYPE_ARG1=int",
+  "RECV_TYPE_ARG2=void*",
+  "RECV_TYPE_ARG3=size_t",
+  "RECV_TYPE_ARG4=int",
+  "RECV_TYPE_RETV=ssize_t",
+  "SEND_QUAL_ARG2=const",
+  "SEND_TYPE_ARG1=int",
+  "SEND_TYPE_ARG2=void*",
+  "SEND_TYPE_ARG3=size_t",
+  "SEND_TYPE_ARG4=int",
+  "SEND_TYPE_RETV=ssize_t",
+  "TIME_WITH_SYS_TIME=1",
+]
+default_include_dirs = ["build-config/c-ares"]
+
+[tools]
+clang = "clang"
+clangxx = "clang++"
+llvm_profdata = "llvm-profdata"
+llvm_cov = "llvm-cov"
+bubblewrap = "bwrap"
+
+[sandbox]
+required = false
+disable_network = true
+
+[resources]
+timeout_seconds = 660
+memory_mb = 2048
+cpu_seconds = 660
+process_count = 16
+max_commands = 16
+max_output_bytes = 1048576
+
+[coverage]
+require_target_function_hit = true
+min_libfuzzer_cov_delta = 0
+min_feature_delta = 0
+min_corpus_delta = 0
+min_target_line_delta = 0.0
+require_any_positive_growth = true
+min_execs_per_second = 0.0

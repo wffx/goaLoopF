@@ -1,0 +1,56 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "goaloop-fuzz"
+version = "0.1.0"
+description = "Deterministic goal loop for DeepSeek-assisted libFuzzer harness generation"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "License :: OSI Approved :: Apache Software License",
+  "Operating System :: POSIX :: Linux",
+  "Topic :: Software Development :: Testing",
+]
+dependencies = [
+  "pydantic>=2.10,<3",
+  "typer>=0.15,<1",
+]
+
+[project.optional-dependencies]
+dsh = ["deepseek-harness-sdk"]
+dev = [
+  "mypy>=1.13",
+  "pytest>=8.3",
+  "pytest-cov>=6",
+  "ruff>=0.8",
+]
+
+[project.scripts]
+goaloop = "goaloop.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/goaloop"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.ruff.lint.per-file-ignores]
+"src/goaloop/cli.py" = ["B008"]  # typer Option/Argument in defaults is the documented pattern
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+packages = ["goaloop"]
+
