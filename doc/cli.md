@@ -106,15 +106,27 @@ goaloop resume --run-id 20260819T...
 goaloop evaluate suite.json --repetitions 3
 ```
 
-## 沙箱选项
+## 沙箱选项（可选）
 
-默认 Profile 不启用沙箱（`sandbox.required = false`）。如需沙箱隔离（禁用网络、只读绑定源码、仅 run 目录可写）：
+默认 Profile 不启用沙箱（`sandbox.required = false`），libFuzzer harness 直接在本地
+执行：仅施加墙钟超时 + RLIMIT_CPU（内存由 libFuzzer `-rss_limit_mb` 约束；ASan 需要大
+虚拟地址空间，故不设 RLIMIT_AS）。
+
+如需 bubblewrap 沙箱隔离（禁用网络、只读绑定源码、仅 run 目录可写、RSS/进程数/CPU
+限制、超时回收进程树）：
 
 ```bash
-# 需要先安装 bubblewrap，然后：
+# 1. 安装 bubblewrap（Linux），并确认内核允许非特权 user namespaces
+sudo apt install bubblewrap
+
+# 2. 用沙箱 Profile 运行（与 default 相同的工具链与覆盖策略，仅多了沙箱隔离）
 goaloop doctor --profile sandboxed
 goaloop run --source repos/... --function ... --profile sandboxed
 ```
+
+沙箱不可用（未装 bwrap）时，`sandboxed` Profile 会在预处理阶段判为 `blocked`，不会
+静默降级。`profiles/sandboxed.toml` 与 `profiles/default.toml` 的唯一区别是
+`sandbox.required = true`。
 
 ## 环境变量
 

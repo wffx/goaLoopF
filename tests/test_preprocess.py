@@ -52,17 +52,25 @@ def test_missing_source_directory(workspace_root: Path, default_profile: object)
     assert result.terminal_status is TerminalStatus.NEEDS_INPUT
 
 
-def test_source_outside_repos(workspace_root: Path, default_profile: object) -> None:
+def test_custom_source_directory(workspace_root: Path, default_profile: object, tmp_path: Path) -> None:
+    # Targets no longer have to live under repos/: any explicit directory works.
+    custom = tmp_path / "custom-proj"
+    (custom / "src").mkdir(parents=True)
+    (custom / "src" / "impl.c").write_text(
+        "#include <stddef.h>\n#include <stdint.h>\nint custom_parse(const uint8_t *d, size_t s) { return d[s-1]; }\n",
+        encoding="utf-8",
+    )
     result = preprocess_request(
         workspace_root,
-        "run-3",
-        _request(workspace_root, source=".."),
+        "run-custom",
+        _request(workspace_root, source=str(custom), function="custom_parse"),
         default_profile,  # type: ignore[arg-type]
         check_runtime=False,
     )
-    assert not result.ready
-    assert result.terminal_status is TerminalStatus.NEEDS_INPUT
-    assert "repos/" in (result.reason or "")
+    assert result.ready
+    assert result.project_name == "custom-proj"
+    scope = next(item for item in result.capability_report.capabilities if item.name == "source_scope")
+    assert "custom" in scope.detail
 
 
 def test_symlink_escape_detected(workspace_root: Path, default_profile: object) -> None:

@@ -36,9 +36,10 @@ def preprocess_request(
     check_runtime: bool = True,
 ) -> PreprocessResult:
     workspace_root = workspace_root.resolve()
-    repos_root = (workspace_root / "repos").resolve()
     source_root = _resolve_source(workspace_root, request.source)
     project_name = source_root.name if source_root.name else "unknown"
+    repos_root = (workspace_root / "repos").resolve()
+    inside_repos = source_root.is_relative_to(repos_root)
 
     basic_caps: list[Capability] = []
     if not source_root.is_dir():
@@ -51,17 +52,6 @@ def preprocess_request(
             basic_caps,
             TerminalStatus.NEEDS_INPUT,
             f"source directory does not exist: {source_root}",
-        )
-    if not source_root.is_relative_to(repos_root):
-        basic_caps.append(Capability(name="source_scope", available=False, detail="outside repos/"))
-        return _not_ready(
-            run_id,
-            project_name,
-            source_root,
-            request,
-            basic_caps,
-            TerminalStatus.NEEDS_INPUT,
-            "source must resolve below repos/",
         )
 
     escape = _find_symlink_escape(source_root)
@@ -95,7 +85,11 @@ def preprocess_request(
     contexts = _collect_context(source_root, matching, files)
     signatures = _candidate_signatures(matching, request.function)
     capabilities = [
-        Capability(name="source_scope", available=True, detail="source is contained in repos/"),
+        Capability(
+            name="source_scope",
+            available=True,
+            detail="source under repos/" if inside_repos else "custom source directory (outside repos/)",
+        ),
         Capability(name="target_function", available=True, detail=f"found in {len(matching)} file(s)"),
     ]
     if check_runtime:
