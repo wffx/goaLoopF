@@ -185,6 +185,9 @@ class ReportMixin:
         return iterations if iterations.is_dir() else None
 
     def _empty_preprocess(self: ControllerState) -> PreprocessResult:
+        # Fallback only used in the report phase of a terminal run whose
+        # preprocess.json is missing (e.g. an interrupted resume); the contract
+        # requires a non-ready result to carry a terminal_status.
         assert self.state is not None
         return PreprocessResult(
             run_id=self.state.run_id,
@@ -194,4 +197,6 @@ class ReportMixin:
             language=self.request.language,
             target_function=self.request.function,
             capability_report=CapabilityReport(platform="unknown", capabilities=[]),
+            terminal_status=TerminalStatus.FAILED,
+            reason="preprocess result unavailable",
         )

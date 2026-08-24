@@ -29,6 +29,9 @@ goaloop run --source repos/<project> --function <symbol>
 | `--max-generation-loops` | `5` | 1–20，模型生成/修订的最大轮数 |
 | `--fuzz-seconds` | `600` | 1–86400，每个候选的 libFuzzer 执行时长 |
 | `--seed-corpus` | — | 可选：目录，其中的种子输入复制进 run corpus（跨 run 复用上一轮语料） |
+| `--model-name` | Profile 值 | 覆盖模型 ID（如 `gpt-4o`、`deepseek-v4-pro`） |
+| `--base-url` | Profile 值 | 覆盖模型端点（deepseek 适配器生效） |
+| `--api-key` | 环境变量 | 覆盖模型凭据（注入 Profile 的 `api_key_env`，仅本次进程生效，不落盘） |
 | `--verbose` | `false` | 实时打印控制器进度事件（preprocess/compile/fuzz/decided 等） |
 | `--workspace` | cwd | 工作区根目录 |
 
@@ -130,6 +133,22 @@ goaloop run --source ... --function ... --model-profile pi-ai-openai
 # 自定义 OpenAI 兼容网关（vLLM/Ollama，需 export CUSTOM_GATEWAY_API_KEY 等）
 goaloop run --source ... --function ... --model-profile pi-ai-custom
 ```
+
+除 `export` 环境变量外，也可在命令行直接覆盖模型连接参数（优先级
+CLI > Profile > 默认）：
+
+```bash
+goaloop run --source ... --function ... \
+    --model-profile default \
+    --model-name gpt-4o \
+    --base-url https://proxy.example/v1 \
+    --api-key 'sk-...'
+```
+
+`--api-key` 仅注入本次进程的 `api_key_env`（不写入任何配置或日志）；注意
+命令行参数可能在进程列表/Shell 历史中可见，敏感场景建议用环境变量。
+`resume` 与 `evaluate`（manifest entry 可含 `model_name`/`base_url`/`api_key`
+字段）同样支持这些覆盖。
 
 `cordis/goaloop.pi-ai.cordis.yml` 挂载 `@deepseek-ai/dsh-llm-pi-ai` 多 provider
 适配器：内置 catalog 路由（deepseek/openai/anthropic/google/groq/mistral/

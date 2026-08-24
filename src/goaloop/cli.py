@@ -14,7 +14,7 @@ import typer
 from .backend import LocalLinuxBackend, toolchain_capabilities
 from .config import load_model_profile, load_validation_profile
 from .driver import DeepSeekHarnessDriver
-from .models import Capability, FuzzRunRequest, Language, RunEvent, RunState
+from .models import Capability, FuzzRunRequest, Language, ModelProfile, RunEvent, RunState
 from .report import REPORT_FILENAME, VALIDATION_FILENAME
 from .storage import ArtifactStore, create_run_id
 from .workflow import RunController
@@ -60,6 +60,17 @@ def run(
     seed_corpus: Path | None = typer.Option(
         None, "--seed-corpus", help="directory of seed inputs copied into the run corpus"
     ),
+    model_name: str | None = typer.Option(
+        None, "--model-name", help="override model id (e.g. gpt-4o, deepseek-v4-pro)"
+    ),
+    base_url: str | None = typer.Option(
+        None, "--base-url", help="override model endpoint (deepseek adapter)"
+    ),
+    api_key: str | None = typer.Option(
+        None,
+        "--api-key",
+        help="override model credential (injected into the profile's api_key_env)",
+    ),
     verbose: bool = typer.Option(False, "--verbose", help="print live progress events"),
     workspace: Path | None = typer.Option(None, "--workspace", help="workspace root (default: cwd)"),
 ) -> None:
@@ -76,7 +87,7 @@ def run(
         seed_corpus=seed_corpus,
     )
     validation = load_validation_profile(profile, ws)
-    model = load_model_profile(model_profile, ws)
+    model = _apply_model_overrides(load_model_profile(model_profile, ws), model_name, base_url, api_key)
     run_id = create_run_id()
     private_session = ws / ".private-sessions" / run_id
     driver = DeepSeekHarnessDriver(
@@ -111,6 +122,9 @@ def run(
 @app.command()
 def resume(
     run_id: str = typer.Option(..., "--run-id", help="run id to resume"),
+    model_name: str | None = typer.Option(None, "--model-name", help="override model id"),
+    base_url: str | None = typer.Option(None, "--base-url", help="override model endpoint"),
+    api_key: str | None = typer.Option(None, "--api-key", help="override model credential"),
     verbose: bool = typer.Option(False, "--verbose", help="print live progress events"),
     workspace: Path | None = typer.Option(None, "--workspace"),
 ) -> None:
@@ -119,7 +133,7 @@ def resume(
     run_dir = _find_run_dir(ws, run_id)
     state = _load_run_state(run_dir)
     validation = load_validation_profile(state.request.profile, ws)
-    model = load_model_profile(state.request.model_profile, ws)
+    model = _apply_model_overrides(load_model_profile(state.request.model_profile, ws), model_name, base_url, api_key)
     private_session = ws / ".private-sessions" / run_id
     driver = DeepSeekHarnessDriver(
         provider=model.provider,
@@ -269,7 +283,12 @@ def evaluate(
             }
         )
         validation = load_validation_profile(request.profile, ws)
-        model = load_model_profile(request.model_profile, ws)
+        model = _apply_model_overrides(
+            load_model_profile(request.model_profile, ws),
+            entry.get("model_name"),
+            entry.get("base_url"),
+            entry.get("api_key"),
+        )
         for repetition in range(1, repetitions + 1):
             done += 1
             typer.echo(f"[evaluate] {done}/{total} running {request.function} (rep {repetition})")
@@ -339,6 +358,28 @@ def _echo_state(state: RunState, *, run_dir: Path) -> None:
     typer.echo(f"[goaloop] generation loops used: {state.generation_loop}")
     typer.echo(f"[goaloop] status: {state.terminal_status.value if state.terminal_status else 'in_progress'}")
     typer.echo(f"[goaloop] artifacts: {run_dir}")
+
+
+def _apply_model_overrides(
+    model: ModelProfile,
+    model_name: str | None,
+    base_url: str | None,
+    api_key: str | None,
+) -> ModelProfile:
+    """Apply CLI-level model overrides on top of the loaded model profile.
+
+    CLI values win over the profile. An explicit --api-key is injected into the
+    profile's api_key_env for this process only (never persisted), so both the
+    preprocess readiness check and the SDK subprocess see it.
+    """
+    update: dict[str, Any] = {}
+    if model_name is not None:
+        update["model"] = model_name
+    if base_url is not None:
+        update["base_url"] = base_url
+    if api_key is not None:
+        os.environ[model.api_key_env] = api_key
+    return model.model_copy(update=update)
 
 
 def _verbose_event_printer(enabled: bool) -> Callable[[RunEvent], None] | None:

@@ -189,3 +189,75 @@ class TestEvaluate:
         manifest.write_text("not json", encoding="utf-8")
         result = runner.invoke(app, ["evaluate", str(manifest), "--workspace", str(workspace_root)])
         assert result.exit_code != 0
+
+
+class TestModelOverrides:
+    def test_override_helper_merges(self) -> None:
+        from goaloop.cli import _apply_model_overrides
+        from goaloop.models import ModelProfile
+
+        base = ModelProfile(name="default")
+        merged = _apply_model_overrides(base, "gpt-4o", "https://proxy.example/v1", None)
+        assert merged.model == "gpt-4o"
+        assert merged.base_url == "https://proxy.example/v1"
+        assert merged.provider == "deepseek-official"  # unchanged
+
+    def test_override_helper_injects_api_key(self, monkeypatch) -> None:
+        import os
+
+        from goaloop.cli import _apply_model_overrides
+        from goaloop.models import ModelProfile
+
+        monkeypatch.delenv("CUSTOM_MODEL_KEY", raising=False)
+        base = ModelProfile(name="custom", api_key_env="CUSTOM_MODEL_KEY")
+        _apply_model_overrides(base, None, None, "secret-token")
+        assert os.environ.get("CUSTOM_MODEL_KEY") == "secret-token"
+
+    def test_run_accepts_model_override_flags(self, workspace_root: Path) -> None:
+        result = runner.invoke(
+            app,
+            [
+                "run",
+                "--source",
+                "repos/does-not-exist",
+                "--function",
+                "f",
+                "--model-profile",
+                "default",
+                "--model-name",
+                "gpt-4o",
+                "--base-url",
+                "https://proxy.example/v1",
+                "--workspace",
+                str(workspace_root),
+                "--max-generation-loops",
+                "1",
+                "--fuzz-seconds",
+                "1",
+            ],
+        )
+        assert result.exit_code == 0
+        assert "needs_input" in result.output
+
+    def test_resume_accepts_api_key_flag(self, workspace_root: Path, monkeypatch) -> None:
+        import os
+
+        run_id = "run-cli-override"
+        _make_run(workspace_root, run_id, terminal=TerminalStatus.BLOCKED)
+        monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+        result = runner.invoke(
+            app,
+            [
+                "resume",
+                "--run-id",
+                run_id,
+                "--api-key",
+                "cli-supplied-key",
+                "--workspace",
+                str(workspace_root),
+            ],
+        )
+        # resume of a terminal blocked run re-renders the report without calling
+        # the model, but the CLI must parse the flags and inject the key.
+        assert result.exit_code == 0
+        assert os.environ.get("DEEPSEEK_API_KEY") == "cli-supplied-key"
