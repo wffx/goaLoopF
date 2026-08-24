@@ -236,12 +236,14 @@ def doctor(
             detail="importable" if sdk_available else "not installed",
         )
     )
-    has_key = bool(os.environ.get(model.api_key_env))
+    env_key = os.environ.get(model.api_key_env)
+    has_key = bool(env_key or model.api_key)
+    source = "profile api_key" if model.api_key else f"{model.api_key_env} set"
     capabilities.append(
         Capability(
             name="model_api_key",
             available=has_key,
-            detail=f"{model.api_key_env} set" if has_key else f"{model.api_key_env} missing",
+            detail=source if has_key else f"{model.api_key_env} missing (and no api_key in profile)",
         )
     )
     for item in capabilities:
@@ -373,17 +375,20 @@ def _apply_model_overrides(
 ) -> ModelProfile:
     """Apply CLI-level model overrides on top of the loaded model profile.
 
-    CLI values win over the profile. An explicit --api-key is injected into the
-    profile's api_key_env for this process only (never persisted), so both the
-    preprocess readiness check and the SDK subprocess see it.
+    Precedence for the credential: ``--api-key`` CLI > ``api_key`` stored in
+    the profile toml > the ``api_key_env`` environment variable. The effective
+    key is injected into ``api_key_env`` for this process only (never
+    persisted), so both the preprocess readiness check and the SDK subprocess
+    see it.
     """
     update: dict[str, Any] = {}
     if model_name is not None:
         update["model"] = model_name
     if base_url is not None:
         update["base_url"] = base_url
-    if api_key is not None:
-        os.environ[model.api_key_env] = api_key
+    effective_key = api_key if api_key is not None else model.api_key
+    if effective_key is not None:
+        os.environ[model.api_key_env] = effective_key
     return model.model_copy(update=update)
 
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 from typer.testing import CliRunner
@@ -261,3 +262,47 @@ class TestModelOverrides:
         # the model, but the CLI must parse the flags and inject the key.
         assert result.exit_code == 0
         assert os.environ.get("DEEPSEEK_API_KEY") == "cli-supplied-key"
+
+
+
+class TestProfileApiKey:
+    def test_load_api_key_from_toml(self, tmp_path: Path) -> None:
+        from goaloop.config import load_model_profile
+
+        (tmp_path / "model-profiles").mkdir()
+        (tmp_path / "model-profiles" / "keyed.toml").write_text(
+            'name = "keyed"\nprovider = "openai"\nmodel = "gpt-4o"\napi_key = "sk-toml-key"\n',
+            encoding="utf-8",
+        )
+        profile = load_model_profile("keyed", tmp_path)
+        assert profile.api_key == "sk-toml-key"
+
+    def test_cli_overrides_profile_api_key(self, monkeypatch) -> None:
+        from goaloop.cli import _apply_model_overrides
+        from goaloop.models import ModelProfile
+
+        monkeypatch.delenv("CUSTOM_KEY", raising=False)
+        base = ModelProfile(name="k", api_key="sk-toml", api_key_env="CUSTOM_KEY")
+        _apply_model_overrides(base, None, None, "sk-cli")
+        assert os.environ.get("CUSTOM_KEY") == "sk-cli"
+
+    def test_profile_api_key_used_when_no_cli(self, monkeypatch) -> None:
+        from goaloop.cli import _apply_model_overrides
+        from goaloop.models import ModelProfile
+
+        monkeypatch.delenv("CUSTOM_KEY", raising=False)
+        base = ModelProfile(name="k", api_key="sk-toml", api_key_env="CUSTOM_KEY")
+        _apply_model_overrides(base, None, None, None)
+        assert os.environ.get("CUSTOM_KEY") == "sk-toml"
+
+    def test_doctor_reports_profile_api_key(self, workspace_root: Path, monkeypatch) -> None:
+        (workspace_root / "model-profiles" / "keyed.toml").write_text(
+            'name = "keyed"\nprovider = "openai"\nmodel = "gpt-4o"\napi_key = "sk-profile-key"\n',
+            encoding="utf-8",
+        )
+        monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+        result = runner.invoke(
+            app, ["doctor", "--model-profile", "keyed", "--workspace", str(workspace_root)]
+        )
+        assert result.exit_code == 0
+        assert "profile api_key" in result.output

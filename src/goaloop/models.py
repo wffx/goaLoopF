@@ -177,6 +177,12 @@ class ModelProfile(Contract):
     # and doctor to gate readiness. The runtime subprocess inherits the whole
     # environment, so the adapter reads its own key (e.g. OPENAI_API_KEY).
     api_key_env: str = "DEEPSEEK_API_KEY"
+    # Optional credential stored directly in the profile (alternative to the
+    # environment variable). Precedence: --api-key CLI > api_key in toml >
+    # api_key_env environment variable. SECURITY: a plaintext key in a profile
+    # file can leak via version control or file sharing; prefer environment
+    # variables or a .local profile that is git-ignored.
+    api_key: str | None = None
 
 
 class Capability(Contract):

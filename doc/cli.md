@@ -121,6 +121,7 @@ goaloop evaluate suite.json --repetitions 3
 | `cordis` | `cordis/goaloop.cordis.yml` | 使用的 Cordis 组合（deepseek 专用或 `goaloop.pi-ai.cordis.yml` 多 provider） |
 | `base_url` | — | 自定义端点（仅 deepseek 适配器生效，SDK 转 `DEEPSEEK_BASE_URL`） |
 | `api_key_env` | `DEEPSEEK_API_KEY` | 模型凭据所在环境变量（preprocess/doctor 按此检查） |
+| `api_key` | — | 可选：直接写在 profile 的明文凭据（优先级：`--api-key` > `api_key` > `api_key_env` 环境变量） |
 
 内置示例（见 [model-profiles/](../model-profiles/)）：
 
@@ -150,6 +151,21 @@ goaloop run --source ... --function ... \
 命令行参数可能在进程列表/Shell 历史中可见，敏感场景建议用环境变量。
 `resume` 与 `evaluate`（manifest entry 可含 `model_name`/`base_url`/`api_key`
 字段）同样支持这些覆盖。
+
+除环境变量与 CLI 参数外，凭据也可直接写在 model-profile 的 toml 中：
+
+```toml
+# model-profiles/pi-ai-openai.toml
+name = "pi-ai-openai"
+provider = "openai"
+model = "gpt-4o"
+api_key_env = "OPENAI_API_KEY"
+api_key = "sk-your-openai-key-here"   # 可选：明文凭据
+```
+
+> **安全警告**：明文 key 随文件存在泄漏风险（版本控制、文件分享）。`model-profiles/`
+> 在仓库内，**不要提交含真实 key 的 profile**；建议用环境变量，或把含 key 的
+> profile 放到 `~/.config/goaloop/model-profiles/`（用户级路径，不入库）。
 
 `cordis/goaloop.pi-ai.cordis.yml` 挂载 `@deepseek-ai/dsh-llm-pi-ai` 多 provider
 适配器：内置 catalog 路由（deepseek/openai/anthropic/google/groq/mistral/

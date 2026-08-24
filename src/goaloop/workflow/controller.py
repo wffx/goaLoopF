@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 import time
 from collections.abc import Callable
@@ -222,6 +223,7 @@ class RunController(GenerationMixin, ReportMixin):
     def _preprocess_step(self) -> None:
         assert self.state is not None
         started = time.monotonic()
+        self._ensure_model_credential()
         preprocess = preprocess_request(
             self.workspace_root,
             self.state.run_id,
@@ -251,6 +253,12 @@ class RunController(GenerationMixin, ReportMixin):
             self._enter_phase(Phase.CRASH_ANALYSIS_REPORT)
             return
         self._enter_phase(Phase.HARNESS_GENERATION)
+
+    def _ensure_model_credential(self) -> None:
+        """Make a profile-stored api_key visible to readiness checks and the
+        SDK subprocess by injecting it into api_key_env for this process."""
+        if self.model_profile is not None and self.model_profile.api_key:
+            os.environ[self.model_profile.api_key_env] = self.model_profile.api_key
 
     def _seed_corpus(self) -> None:
         """Copy user-provided seed inputs into the run's corpus before fuzzing."""

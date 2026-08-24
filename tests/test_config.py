@@ -66,3 +66,4 @@ class TestModelProfileExtras:
         assert profile.base_url == "https://proxy.example/v1"
         assert profile.api_key_env == "OPENAI_API_KEY"
         assert profile.cordis == (tmp_path / "cordis" / "goaloop.pi-ai.cordis.yml").resolve()
+
