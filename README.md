@@ -48,6 +48,16 @@ goaloop run --source /path/to/any/project --function <symbol> --profile default
 `default_defines` / `default_include_dirs`），见 [profiles/c-ares.toml](profiles/c-ares.toml)
 示例与 [doc/README.md](doc/README.md)。
 
+**CMake 构建目录模式**：项目有现成 CMake 工程时，用 `--build-dir` 指向含
+`CMakeLists.txt` 的目录。控制器在该目录内（out-of-source 到
+`<build-dir>/goaloop-build`）用 clang + ASan/UBSan/覆盖插桩配置并构建，产出
+的插桩静态库直接链接进 harness——模型只需写 harness，不再猜构建参数，显著
+节省 token：
+
+```bash
+goaloop run --source repos/<project> --function <symbol> --build-dir repos/<project> --profile default
+```
+
 ## 模块结构
 
 ```

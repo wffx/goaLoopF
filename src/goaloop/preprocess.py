@@ -55,6 +55,46 @@ def preprocess_request(
             f"source directory does not exist: {source_root}",
         )
 
+    if request.build_dir is not None:
+        build_dir = (
+            request.build_dir
+            if request.build_dir.is_absolute()
+            else workspace_root / request.build_dir
+        ).resolve()
+        if not build_dir.is_dir():
+            basic_caps.append(Capability(name="build_dir", available=False, detail="build directory missing"))
+            return _not_ready(
+                run_id,
+                project_name,
+                source_root,
+                request,
+                basic_caps,
+                TerminalStatus.NEEDS_INPUT,
+                f"build directory does not exist: {build_dir}",
+            )
+        if not (build_dir / "CMakeLists.txt").is_file():
+            basic_caps.append(Capability(name="build_dir", available=False, detail="CMakeLists.txt missing"))
+            return _not_ready(
+                run_id,
+                project_name,
+                source_root,
+                request,
+                basic_caps,
+                TerminalStatus.NEEDS_INPUT,
+                f"build directory has no CMakeLists.txt: {build_dir}",
+            )
+        if profile.sandbox.required:
+            basic_caps.append(Capability(name="build_dir", available=False, detail="cmake build requires no sandbox"))
+            return _not_ready(
+                run_id,
+                project_name,
+                source_root,
+                request,
+                basic_caps,
+                TerminalStatus.BLOCKED,
+                "build-directory mode requires sandbox.required = false",
+            )
+
     escape = _find_symlink_escape(source_root)
     if escape is not None:
         basic_caps.append(Capability(name="source_scope", available=False, detail=str(escape)))

@@ -29,6 +29,7 @@ goaloop run --source repos/<project> --function <symbol>
 | `--max-generation-loops` | `5` | 1–20，模型生成/修订的最大轮数 |
 | `--fuzz-seconds` | `600` | 1–86400，每个候选的 libFuzzer 执行时长 |
 | `--seed-corpus` | — | 可选：目录，其中的种子输入复制进 run corpus（跨 run 复用上一轮语料） |
+| `--build-dir` | — | 可选：CMake 工程目录（含 `CMakeLists.txt`）。控制器在该目录内构建并链接插桩静态库，模型不再猜构建参数 |
 | `--model-name` | Profile 值 | 覆盖模型 ID（如 `gpt-4o`、`deepseek-v4-pro`） |
 | `--base-url` | Profile 值 | 覆盖模型端点（deepseek 适配器生效） |
 | `--api-key` | 环境变量 | 覆盖模型凭据（注入 Profile 的 `api_key_env`，仅本次进程生效，不落盘） |
@@ -154,6 +155,34 @@ goaloop run --source ... --function ... \
 适配器：内置 catalog 路由（deepseek/openai/anthropic/google/groq/mistral/
 openrouter/xai）+ 手写 OpenAI 兼容网关。自定义网关端点/模型名可用
 `CUSTOM_GATEWAY_BASE_URL` / `CUSTOM_GATEWAY_MODEL` 环境变量覆盖，无需改文件。
+
+## CMake 构建目录模式（可选）
+
+用户提供现成 CMake 工程时，`--build-dir <dir>`（目录下固定存放
+`CMakeLists.txt`）让控制器在该目录内完成构建：
+
+```bash
+goaloop run --source repos/<project> --function <symbol> --build-dir repos/<project>
+```
+
+流程（均在 `<build-dir>` 内完成，out-of-source）：
+
+1. `cmake -S <build-dir> -B <build-dir>/goaloop-build -DCMAKE_C_COMPILER=clang
+   -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_C_FLAGS="-fsanitize=address,undefined
+   -fprofile-instr-generate -fcoverage-mapping"`（配置，插桩保证覆盖归因）
+2. `cmake --build <build-dir>/goaloop-build`
+3. harness 编译链接产物：`clang -fsanitize=fuzzer,address,undefined
+   <harness.c> -I<build-dir> <build-dir>/goaloop-build/libxxx.a -o fuzzer`
+
+要点：
+
+- 模型生成的 `BuildPlan.target_sources` 在构建模式下被忽略——产品源码来自库，
+  模型只写 harness，显著降低 token 消耗。
+- 库产物查找：`profiles/*.toml` 的 `[build] library`（相对
+  `goaloop-build`）优先，否则自动取第一个 `*.a`（多库工程请显式声明）；
+  `[build] include_dirs`（相对 build-dir）与 `[build] flags` 可附加。
+- `CMakeLists.txt` 不被修改；构建目录内的 `goaloop-build/` 为控制器构建输出。
+- 需要系统已装 `cmake`；**要求 `sandbox.required = false`**（cmake 需写构建目录）。
 
 ## 沙箱选项（可选）
 

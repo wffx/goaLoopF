@@ -55,6 +55,7 @@ def toolchain_capabilities(profile: ValidationProfile) -> list[Capability]:
     }
     if profile.sandbox.required:
         tool_names["bubblewrap"] = profile.tools.bubblewrap
+    tool_names["cmake"] = profile.tools.cmake
     for name, executable in tool_names.items():
         found = shutil.which(executable)
         capabilities.append(
@@ -86,6 +87,7 @@ class LocalLinuxBackend:
             self.profile.tools.clangxx,
             self.profile.tools.llvm_profdata,
             self.profile.tools.llvm_cov,
+            self.profile.tools.cmake,
         ]
         if self.profile.sandbox.required:
             allowed.append(self.profile.tools.bubblewrap)

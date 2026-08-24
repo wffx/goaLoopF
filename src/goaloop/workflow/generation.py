@@ -21,6 +21,8 @@ from ..models import (
 )
 from ..validation import (
     ArtifactPolicyError,
+    assemble_cmake_build_request,
+    assemble_cmake_configure_request,
     assemble_compile_request,
     assemble_fuzz_request,
     decide_generation,
@@ -101,11 +103,18 @@ class GenerationMixin:
         )
         self.backend.prepare(context)
 
+        build_library, build_include_dirs = self._cmake_build_if_requested(loop)
+        if build_library is None and self.request.build_dir is not None:
+            # cmake configure/build failed; terminal decided by the event above.
+            return
+
         compile_request = assemble_compile_request(
             artifacts,
             self.profile,
             self.preprocess.source_root,
             candidate_dir,
+            build_library=build_library,
+            build_include_dirs=build_include_dirs,
         )
         compile_result = self.backend.execute(compile_request)
         self._event(
@@ -177,6 +186,77 @@ class GenerationMixin:
             return
         # crash_candidate
         self._enter_phase(Phase.CRASH_ANALYSIS_REPORT)
+
+    def _cmake_build_if_requested(
+        self: ControllerState,
+        loop: int,
+    ) -> tuple[Path | None, list[Path] | None]:
+        """Configure and build the user CMake project, returning the library.
+
+        Returns ``(None, None)`` when build-dir mode is not in use; on failure
+        it records a blocked/regeneration event and returns ``(None, None)``
+        while leaving the terminal decision to the caller.
+        """
+        build_dir = self.request.build_dir
+        if build_dir is None or self.store is None:
+            return None, None
+        assert self.preprocess is not None
+        build_dir = build_dir.resolve()
+        build_root = build_dir / "goaloop-build"
+        cmake = self.profile.tools.cmake
+        timeout = self.profile.resources.timeout_seconds
+
+        configure = assemble_cmake_configure_request(
+            cmake=cmake,
+            clang=self.profile.tools.clang,
+            clangxx=self.profile.tools.clangxx,
+            build_dir=build_dir,
+            build_root=build_root,
+            flags=self.profile.build.flags,
+            timeout_seconds=timeout,
+        )
+        configure_result = self.backend.execute(configure)
+        self._event(
+            "execution:cmake_configure",
+            {"loop": loop, "exit_code": configure_result.exit_code, "build_dir": str(build_dir)},
+        )
+        if configure_result.exit_code != 0:
+            self._terminate(TerminalStatus.BLOCKED, f"cmake configure failed: {configure_result.stderr[-2000:]}")
+            return None, None
+
+        build_request = assemble_cmake_build_request(
+            cmake=cmake,
+            build_root=build_root,
+            target=self.profile.build.target,
+            timeout_seconds=timeout,
+        )
+        build_result = self.backend.execute(build_request)
+        self._event(
+            "execution:cmake_build",
+            {"loop": loop, "exit_code": build_result.exit_code},
+        )
+        if build_result.exit_code != 0:
+            self._terminate(TerminalStatus.BLOCKED, f"cmake build failed: {build_result.stderr[-2000:]}")
+            return None, None
+
+        library = self._find_build_library(build_root)
+        if library is None:
+            self._terminate(
+                TerminalStatus.BLOCKED,
+                "cmake build produced no static library; declare build.library in the profile",
+            )
+            return None, None
+        include_dirs = [build_dir / item for item in self.profile.build.include_dirs]
+        self._event("execution:cmake_library", {"loop": loop, "library": str(library)})
+        return library, include_dirs
+
+    def _find_build_library(self: ControllerState, build_root: Path) -> Path | None:
+        declared = self.profile.build.library
+        if declared:
+            candidate = build_root / declared
+            return candidate if candidate.is_file() else None
+        archives = sorted(item for item in build_root.rglob("*.a") if item.is_file())
+        return archives[0] if archives else None
 
     def _run_fuzz_and_coverage(
         self: ControllerState,

@@ -61,8 +61,17 @@ def assemble_compile_request(
     profile: ValidationProfile,
     source_root: Path,
     candidate_dir: Path,
+    *,
+    build_library: Path | None = None,
+    build_include_dirs: list[Path] | None = None,
 ) -> ProcessRequest:
-    """Build a compiler argv from structured data; generated scripts are never executed."""
+    """Build a compiler argv from structured data; generated scripts are never executed.
+
+    In build-directory mode (``build_library`` set) the product sources come
+    from a prebuilt static library instead of model-declared target_sources:
+    the harness is compiled against the library's include dirs and linked with
+    the library, so the model does not need to guess build parameters.
+    """
 
     validate_generated_artifacts(artifacts, profile)
     source_root = source_root.resolve()
@@ -72,8 +81,14 @@ def assemble_compile_request(
 
     harness = _contained(candidate_dir, build.harness_file, "harness file")
     binary = _contained(candidate_dir, build.binary_name, "fuzzer binary")
-    target_sources = [_contained(source_root, item, "target source") for item in build.target_sources]
+    target_sources = (
+        []
+        if build_library is not None
+        else [_contained(source_root, item, "target source") for item in build.target_sources]
+    )
     include_dirs = [_contained(source_root, item, "include directory") for item in build.include_dirs]
+    if build_include_dirs is not None:
+        include_dirs = [*build_include_dirs, *include_dirs]
 
     argv = [
         compiler,
@@ -87,6 +102,7 @@ def assemble_compile_request(
         *build.cflags,
         *build.ldflags,
         *(_library_argument(item) for item in build.libraries),
+        *([str(build_library)] if build_library is not None else []),
         "-o",
         str(binary),
     ]
@@ -95,6 +111,54 @@ def assemble_compile_request(
         cwd=candidate_dir,
         timeout_seconds=profile.resources.timeout_seconds,
     )
+
+
+INSTRUMENT_FLAGS = "-fsanitize=address,undefined -fprofile-instr-generate -fcoverage-mapping"
+
+
+def assemble_cmake_configure_request(
+    *,
+    cmake: str,
+    clang: str,
+    clangxx: str,
+    build_dir: Path,
+    build_root: Path,
+    flags: list[str] | None = None,
+    timeout_seconds: int,
+) -> ProcessRequest:
+    """Configure the user CMake project with sanitizer/coverage instrumentation.
+
+    Out-of-source build under ``<build_dir>/goaloop-build`` so the user's
+    directory keeps its original layout; CMakeLists.txt is never modified.
+    The compiler is pinned to clang/clang++ because the instrumentation flags
+    (e.g. -fprofile-instr-generate) are clang-specific.
+    """
+    argv = [
+        cmake,
+        "-S",
+        str(build_dir),
+        "-B",
+        str(build_root),
+        f"-DCMAKE_C_COMPILER={clang}",
+        f"-DCMAKE_CXX_COMPILER={clangxx}",
+        "-DCMAKE_C_FLAGS=" + INSTRUMENT_FLAGS,
+        "-DCMAKE_CXX_FLAGS=" + INSTRUMENT_FLAGS,
+        *(flags or []),
+    ]
+    return ProcessRequest(argv=argv, cwd=build_dir, timeout_seconds=timeout_seconds)
+
+
+def assemble_cmake_build_request(
+    *,
+    cmake: str,
+    build_root: Path,
+    target: str | None,
+    timeout_seconds: int,
+) -> ProcessRequest:
+    argv = [cmake, "--build", str(build_root)]
+    if target is not None:
+        argv += ["--target", target]
+    return ProcessRequest(argv=argv, cwd=build_root, timeout_seconds=timeout_seconds)
 
 
 def assemble_fuzz_request(

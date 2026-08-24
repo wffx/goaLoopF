@@ -60,12 +60,15 @@ def run(
     seed_corpus: Path | None = typer.Option(
         None, "--seed-corpus", help="directory of seed inputs copied into the run corpus"
     ),
+    build_dir: Path | None = typer.Option(
+        None,
+        "--build-dir",
+        help="CMake project directory (must contain CMakeLists.txt); builds inside it and links the static library",
+    ),
     model_name: str | None = typer.Option(
         None, "--model-name", help="override model id (e.g. gpt-4o, deepseek-v4-pro)"
     ),
-    base_url: str | None = typer.Option(
-        None, "--base-url", help="override model endpoint (deepseek adapter)"
-    ),
+    base_url: str | None = typer.Option(None, "--base-url", help="override model endpoint (deepseek adapter)"),
     api_key: str | None = typer.Option(
         None,
         "--api-key",
@@ -85,6 +88,7 @@ def run(
         max_generation_loops=max_generation_loops,
         fuzz_seconds=fuzz_seconds,
         seed_corpus=seed_corpus,
+        build_dir=build_dir,
     )
     validation = load_validation_profile(profile, ws)
     model = _apply_model_overrides(load_model_profile(model_profile, ws), model_name, base_url, api_key)
@@ -280,6 +284,7 @@ def evaluate(
                 "max_generation_loops": entry.get("max_generation_loops", 5),
                 "fuzz_seconds": entry.get("fuzz_seconds", 600),
                 "seed_corpus": entry.get("seed_corpus"),
+                "build_dir": entry.get("build_dir"),
             }
         )
         validation = load_validation_profile(request.profile, ws)
