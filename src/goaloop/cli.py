@@ -84,6 +84,7 @@ def run(
         model=model.model,
         max_tokens=model.max_tokens,
         cordis=model.cordis,
+        base_url=model.base_url,
         workspace_root=ws,
         session_root=private_session,
         run_id=run_id,
@@ -125,6 +126,7 @@ def resume(
         model=model.model,
         max_tokens=model.max_tokens,
         cordis=model.cordis,
+        base_url=model.base_url,
         workspace_root=ws,
         session_root=private_session,
         run_id=run_id,
@@ -216,9 +218,13 @@ def doctor(
             detail="importable" if sdk_available else "not installed",
         )
     )
-    has_key = bool(os.environ.get("DEEPSEEK_API_KEY"))
+    has_key = bool(os.environ.get(model.api_key_env))
     capabilities.append(
-        Capability(name="deepseek_api_key", available=has_key, detail="set" if has_key else "DEEPSEEK_API_KEY missing")
+        Capability(
+            name="model_api_key",
+            available=has_key,
+            detail=f"{model.api_key_env} set" if has_key else f"{model.api_key_env} missing",
+        )
     )
     for item in capabilities:
         marker = "ok" if item.available else "MISSING"

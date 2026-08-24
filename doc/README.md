@@ -58,6 +58,10 @@ goaloop run --source repos/cJSON-1.7.17 --function cJSON_Parse --profile default
 ## 关键设计决策速览
 
 - **模型只产出 JSON，不操作文件/命令**：Cordis 组合屏蔽了 Bash、文件编辑、网络、子 Agent 工具；模型通过持久化 goal 管理进度，控制器验证 JSON 合法性后才物化到磁盘。
+- **多模型支持**：默认 DeepSeek 官方适配器；也提供 pi-ai 多 provider 组合
+  （`cordis/goaloop.pi-ai.cordis.yml`），可接 OpenAI/Anthropic 等任意模型或
+  OpenAI 兼容网关，`model-profiles/*.toml` 声明 provider/model/base_url/
+  api_key_env，凭据检查随 profile 变化。
 - **每个候选只执行一次“编译 + 有界 fuzz”**：没有独立的 smoke test；编译失败、fuzz 异常、覆盖不达标统一走反馈修订。
 - **产品 crash 一旦稳定复现，禁止修改 harness 绕过**：crash 归属 → 最小化 → 独立复现 3 次 → 终态 `bug_reproduced`。
 - **沙箱是可选的默认关闭**：`profiles/default.toml` 无沙箱，`profiles/sandboxed.toml` 可选开启 bubblewrap。

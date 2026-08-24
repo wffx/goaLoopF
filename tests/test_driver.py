@@ -321,3 +321,36 @@ class TestDeepSeekHarnessDriver:
         monkeypatch.setitem(sys.modules, "deepseek_harness", None)
         with pytest.raises(DriverUnavailable, match="not installed"):
             driver._open()
+
+
+class TestCustomModelSupport:
+    def test_driver_keeps_base_url(self) -> None:
+        driver = _real_driver()
+        driver.base_url = "https://proxy.example/v1"
+        assert driver.base_url == "https://proxy.example/v1"
+
+    def test_open_passes_base_url_to_sdk(self, monkeypatch) -> None:
+        captured: dict = {}
+
+        class FakeSDK:
+            def __init__(self, **kwargs):
+                captured.update(kwargs)
+
+            def close(self):
+                pass
+
+        import sys
+
+        monkeypatch.setitem(sys.modules, "deepseek_harness", type(sys)("dh"))
+        import types
+
+        fake_module = types.ModuleType("deepseek_harness")
+        fake_module.DeepSeekHarness = FakeSDK
+        monkeypatch.setitem(sys.modules, "deepseek_harness", fake_module)
+
+        driver = _real_driver()
+        driver.base_url = "https://proxy.example/v1"
+        driver._open()
+        assert captured.get("base_url") == "https://proxy.example/v1"
+        assert captured.get("provider") == "deepseek-official"
+        driver.close()

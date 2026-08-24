@@ -132,10 +132,21 @@ class ValidationProfile(Contract):
 
 class ModelProfile(Contract):
     name: str = "default"
+    # Provider route resolved by the Cordis composition's LLM adapter. The
+    # bundled deepseek adapter registers "deepseek-official"; the pi-ai adapter
+    # routes by its providers dict keys (openai, anthropic, deepseek, ... or a
+    # hand-declared OpenAI-compatible gateway name).
     provider: str = "deepseek-official"
     model: str = "deepseek-v4-pro"
     max_tokens: int | None = Field(default=None, ge=1)
     cordis: Path | None = None
+    # Optional endpoint override for the deepseek adapter (OpenAI-compatible
+    # gateways should be configured in the pi-ai Cordis providers instead).
+    base_url: str | None = None
+    # Environment variable holding the model credential; used by preprocess
+    # and doctor to gate readiness. The runtime subprocess inherits the whole
+    # environment, so the adapter reads its own key (e.g. OPENAI_API_KEY).
+    api_key_env: str = "DEEPSEEK_API_KEY"
 
 
 class Capability(Contract):

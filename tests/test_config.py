@@ -46,3 +46,23 @@ def test_invalid_toml_raises(tmp_path: Path) -> None:
     _write_profile(tmp_path / "profiles", "broken", "name = [unclosed")
     with pytest.raises(ProfileError):
         load_validation_profile("broken", tmp_path)
+
+
+class TestModelProfileExtras:
+    def test_load_custom_model_profile(self, tmp_path: Path) -> None:
+        (tmp_path / "cordis").mkdir()
+        (tmp_path / "model-profiles").mkdir()
+        (tmp_path / "model-profiles" / "custom.toml").write_text(
+            'name = "custom"\n'
+            'provider = "openai"\n'
+            'model = "gpt-4o"\n'
+            'cordis = "cordis/goaloop.pi-ai.cordis.yml"\n'
+            'base_url = "https://proxy.example/v1"\n'
+            'api_key_env = "OPENAI_API_KEY"\n',
+            encoding="utf-8",
+        )
+        profile = load_model_profile("custom", tmp_path)
+        assert profile.provider == "openai"
+        assert profile.base_url == "https://proxy.example/v1"
+        assert profile.api_key_env == "OPENAI_API_KEY"
+        assert profile.cordis == (tmp_path / "cordis" / "goaloop.pi-ai.cordis.yml").resolve()

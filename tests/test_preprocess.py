@@ -114,7 +114,7 @@ def test_runtime_capabilities_gate_blocked(
     )
     assert not result.ready
     assert result.terminal_status is TerminalStatus.BLOCKED
-    assert "deepseek_api_key" in (result.reason or "")
+    assert "model_api_key" in (result.reason or "")
 
 
 def test_cpp_language_detection(workspace_root: Path, default_profile: object) -> None:

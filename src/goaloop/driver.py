@@ -121,11 +121,13 @@ class DeepSeekHarnessDriver:
         workspace_root: Path | str,
         session_root: Path | str,
         run_id: str,
+        base_url: str | None = None,
     ) -> None:
         self.provider = provider
         self.model = model
         self.max_tokens = max_tokens
         self.cordis = Path(cordis) if cordis is not None else None
+        self.base_url = base_url
         self.workspace_root = Path(workspace_root).resolve()
         self.session_root = Path(session_root)
         self.run_id = run_id
@@ -197,6 +199,7 @@ class DeepSeekHarnessDriver:
                 cwd=str(self.workspace_root),
                 session_root=str(self.session_root),
                 cordis=str(self.cordis) if self.cordis is not None else None,
+                base_url=self.base_url,
                 shutdown_timeout_seconds=5.0,
             )
         return self._harness

@@ -1,0 +1,8 @@
+# 通过 pi-ai 适配器使用 OpenAI 模型（或任何 OpenAI 兼容端点）。
+# 需要：export OPENAI_API_KEY='...'（或 OPENAI_BASE_URL 由 provider 配置覆盖）
+# 使用：goaloop run ... --model-profile pi-ai-openai
+name = "pi-ai-openai"
+provider = "openai"
+model = "gpt-4o"
+cordis = "cordis/goaloop.pi-ai.cordis.yml"
+api_key_env = "OPENAI_API_KEY"

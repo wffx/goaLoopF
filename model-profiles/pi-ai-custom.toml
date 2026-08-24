@@ -1,0 +1,11 @@
+# 通过 pi-ai 适配器连接自定义 OpenAI 兼容网关（vLLM/Ollama/LM Studio 或代理）。
+# 端点与模型名可用环境变量覆盖，无需编辑 cordis：
+#   export CUSTOM_GATEWAY_API_KEY='...'          # 必填（可为空串表示免认证）
+#   export CUSTOM_GATEWAY_BASE_URL='http://host:port/v1'
+#   export CUSTOM_GATEWAY_MODEL='my-model'
+# 使用：goaloop run ... --model-profile pi-ai-custom
+name = "pi-ai-custom"
+provider = "custom-gateway"
+model = "local-model"
+cordis = "cordis/goaloop.pi-ai.cordis.yml"
+api_key_env = "CUSTOM_GATEWAY_API_KEY"

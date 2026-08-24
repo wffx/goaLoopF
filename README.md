@@ -31,6 +31,9 @@ goaloop run --source repos/cJSON-1.7.17 --function cJSON_Parse --profile default
 - 源码放在 `repos/<project>/`（或任意自定义目录，见下）
 - 所有输出写入 `work/<project>/runs/<run-id>/`，报告为 `report.md`
 - 支持 `resume` / `status` / `report` / `evaluate`，详见 [doc/cli.md](doc/cli.md)
+- 默认使用 DeepSeek 模型；也支持 OpenAI/Anthropic 等任意模型或 OpenAI 兼容
+  网关（通过 pi-ai 适配器，`--model-profile` 选择，见
+  [model-profiles/](model-profiles/) 示例与 [doc/cli.md](doc/cli.md#模型-profile)）
 
 ## 测试目标
 

@@ -34,6 +34,7 @@ def preprocess_request(
     profile: ValidationProfile,
     *,
     check_runtime: bool = True,
+    api_key_env: str = "DEEPSEEK_API_KEY",
 ) -> PreprocessResult:
     workspace_root = workspace_root.resolve()
     source_root = _resolve_source(workspace_root, request.source)
@@ -93,7 +94,7 @@ def preprocess_request(
         Capability(name="target_function", available=True, detail=f"found in {len(matching)} file(s)"),
     ]
     if check_runtime:
-        capabilities.extend(_runtime_capabilities(profile))
+        capabilities.extend(_runtime_capabilities(profile, api_key_env=api_key_env))
     report = CapabilityReport(platform=platform.platform(), capabilities=capabilities)
     if not report.ready:
         missing = ", ".join(item.name for item in capabilities if not item.available)
@@ -219,7 +220,7 @@ def _candidate_signatures(matches: list[Path], symbol: str) -> list[str]:
     return signatures
 
 
-def _runtime_capabilities(profile: ValidationProfile) -> list[Capability]:
+def _runtime_capabilities(profile: ValidationProfile, *, api_key_env: str = "DEEPSEEK_API_KEY") -> list[Capability]:
     capabilities = toolchain_capabilities(profile)
     sdk_available = importlib.util.find_spec("deepseek_harness") is not None
     capabilities.append(
@@ -229,9 +230,13 @@ def _runtime_capabilities(profile: ValidationProfile) -> list[Capability]:
             detail="importable" if sdk_available else "not installed",
         )
     )
-    has_key = bool(os.environ.get("DEEPSEEK_API_KEY"))
+    has_key = bool(os.environ.get(api_key_env))
     capabilities.append(
-        Capability(name="deepseek_api_key", available=has_key, detail="set" if has_key else "DEEPSEEK_API_KEY missing")
+        Capability(
+            name="model_api_key",
+            available=has_key,
+            detail=f"{api_key_env} set" if has_key else f"{api_key_env} missing",
+        )
     )
     return capabilities
 

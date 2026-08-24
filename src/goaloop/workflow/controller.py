@@ -227,6 +227,7 @@ class RunController(GenerationMixin, ReportMixin):
             self.state.run_id,
             self.request,
             self.profile,
+            api_key_env=self.model_profile.api_key_env if self.model_profile is not None else "DEEPSEEK_API_KEY",
         )
         self.preprocess = preprocess
         self.state.project_name = preprocess.project_name

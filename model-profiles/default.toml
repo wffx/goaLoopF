@@ -1,5 +1,8 @@
+# 默认模型 Profile：DeepSeek 官方端点（dsh 内置 deepseek 适配器）。
+# provider = "deepseek-official" 是 @deepseek-ai/dsh-llm-deepseek 注册的路由。
+# 如需自定义端点，可加 base_url = "https://..."（SDK 转 DEEPSEEK_BASE_URL）。
 name = "default"
 provider = "deepseek-official"
 model = "deepseek-v4-pro"
 cordis = "cordis/goaloop.cordis.yml"
-
+api_key_env = "DEEPSEEK_API_KEY"

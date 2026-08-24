@@ -106,6 +106,36 @@ goaloop resume --run-id 20260819T...
 goaloop evaluate suite.json --repetitions 3
 ```
 
+## 模型 Profile（自定义模型）
+
+`--model-profile` 选择模型配置（`model-profiles/*.toml`），不局限于 DeepSeek：
+
+| 字段 | 默认 | 说明 |
+|---|---|---|
+| `provider` | `deepseek-official` | 适配器路由名。`deepseek-official` = dsh 内置 deepseek 适配器；pi-ai 适配器按 providers key（`openai`/`anthropic`/`deepseek`/... 或手写网关名） |
+| `model` | `deepseek-v4-pro` | 模型 ID，由所选适配器路由解析 |
+| `cordis` | `cordis/goaloop.cordis.yml` | 使用的 Cordis 组合（deepseek 专用或 `goaloop.pi-ai.cordis.yml` 多 provider） |
+| `base_url` | — | 自定义端点（仅 deepseek 适配器生效，SDK 转 `DEEPSEEK_BASE_URL`） |
+| `api_key_env` | `DEEPSEEK_API_KEY` | 模型凭据所在环境变量（preprocess/doctor 按此检查） |
+
+内置示例（见 [model-profiles/](../model-profiles/)）：
+
+```bash
+# DeepSeek 官方（默认）
+goaloop run --source ... --function ... --model-profile default
+
+# 通过 pi-ai 使用 OpenAI（需 export OPENAI_API_KEY）
+goaloop run --source ... --function ... --model-profile pi-ai-openai
+
+# 自定义 OpenAI 兼容网关（vLLM/Ollama，需 export CUSTOM_GATEWAY_API_KEY 等）
+goaloop run --source ... --function ... --model-profile pi-ai-custom
+```
+
+`cordis/goaloop.pi-ai.cordis.yml` 挂载 `@deepseek-ai/dsh-llm-pi-ai` 多 provider
+适配器：内置 catalog 路由（deepseek/openai/anthropic/google/groq/mistral/
+openrouter/xai）+ 手写 OpenAI 兼容网关。自定义网关端点/模型名可用
+`CUSTOM_GATEWAY_BASE_URL` / `CUSTOM_GATEWAY_MODEL` 环境变量覆盖，无需改文件。
+
 ## 沙箱选项（可选）
 
 默认 Profile 不启用沙箱（`sandbox.required = false`），libFuzzer harness 直接在本地
@@ -132,7 +162,9 @@ goaloop run --source repos/... --function ... --profile sandboxed
 
 | 变量 | 用途 |
 |---|---|
-| `DEEPSEEK_API_KEY` | DeepSeek API 凭据（必需） |
+| `DEEPSEEK_API_KEY` | DeepSeek API 凭据（默认必需） |
+| `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` 等 | pi-ai 各 provider 路由的凭据（用对应 `--model-profile` 时必需） |
+| `CUSTOM_GATEWAY_BASE_URL` / `CUSTOM_GATEWAY_MODEL` | 自定义 OpenAI 兼容网关的端点与模型名 |
 | `DEEPSEEK_BASE_URL` | 自定义 API 端点（可选，默认官方端点） |
 | `GOALOOP_WORKSPACE` | 工作区根目录（可选，默认 cwd） |
 | `DSH_SESSION_ROOT` | 会话持久化根目录（由控制器自动设置，不用户设置） |
