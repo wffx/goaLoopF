@@ -164,7 +164,37 @@ class RunController(GenerationMixin, ReportMixin):
         crash_path = run_dir / "crash-analysis.json"
         if crash_path.is_file():
             self.last_crash_analysis = CrashAnalysisResult.model_validate_json(crash_path.read_text(encoding="utf-8"))
+        self._recover_terminal_run()
         self._event("phase:resume", {"phase": self.state.phase.value})
+
+    def _recover_terminal_run(self) -> None:
+        """Let resume retry a failed/blocked run instead of only re-rendering.
+
+        A FAILED/BLOCKED terminal (e.g. a transient model endpoint error, or an
+        SDK failure) is often worth retrying after the environment is fixed;
+        resume clears the terminal marker and returns to the generation phase.
+        Already-executed loops are never re-run: evidence is preserved and the
+        next generation continues at ``generation_loop + 1``.
+
+        Terminal statuses that are real outcomes are NOT recovered:
+        harness_verified, bug_reproduced, needs_review (they completed), and
+        needs_input (the request itself is wrong). Budget-exhausted FAILED runs
+        are also kept terminal; the generation step guards against exceeding
+        the budget.
+        """
+        if self.state is None or self.state.terminal_status is None:
+            return
+        status = self.state.terminal_status
+        if status not in (TerminalStatus.FAILED, TerminalStatus.BLOCKED):
+            return
+        if status is TerminalStatus.FAILED and self.state.generation_loop >= self.request.max_generation_loops:
+            return  # budget already exhausted; nothing left to retry
+        reason = self._terminal_reason() or status.value
+        self.state.terminal_status = None
+        if self.goal is not None:
+            self.goal.completed = False
+        self.state.phase = Phase.HARNESS_GENERATION
+        self._event("run:resumed", {"from_status": status.value, "reason": reason})
 
     def _save_checkpoint(self) -> None:
         if self.state is None or self.store is None:

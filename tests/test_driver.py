@@ -272,10 +272,18 @@ class TestDeepSeekHarnessDriver:
             driver.generate_artifacts(goal=_goal(), preprocess=_preprocess(), feedback=None)
         assert driver.format_retries == 0
 
-    def test_empty_response_with_error_reason(self) -> None:
+    def test_empty_response_with_error_reason_is_unavailable(self) -> None:
+        # An endpoint error with no response is a retryable environment
+        # condition (DriverUnavailable -> BLOCKED), not invalid model output.
         driver = _real_driver()
         driver._harness = FakeHarness([""], finish_reason="error")
-        with pytest.raises(GenerationFailure, match="error"):
+        with pytest.raises(DriverUnavailable, match="error"):
+            driver.generate_artifacts(goal=_goal(), preprocess=_preprocess(), feedback=None)
+
+    def test_empty_response_with_max_tokens_is_failure(self) -> None:
+        driver = _real_driver()
+        driver._harness = FakeHarness([""], finish_reason="max-tokens")
+        with pytest.raises(GenerationFailure, match="max-tokens"):
             driver.generate_artifacts(goal=_goal(), preprocess=_preprocess(), feedback=None)
 
     def test_sdk_exception_is_driver_unavailable(self) -> None:
@@ -400,5 +408,5 @@ class TestTurnErrorExtraction:
         harness = FakeHarness([""], finish_reason="error")
         harness.events = events  # type: ignore[attr-defined]
         driver._harness = harness
-        with pytest.raises(GenerationFailure, match="HTTP 429"):
+        with pytest.raises(DriverUnavailable, match="HTTP 429"):
             driver.generate_artifacts(goal=_goal(), preprocess=_preprocess(), feedback=None)

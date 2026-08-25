@@ -438,3 +438,79 @@ class TestBuildDirMode:
         controller.close()
         assert state.terminal_status is TerminalStatus.NEEDS_INPUT
         assert "CMakeLists.txt" in _report_text(workspace_root, "run-cmake-bad")
+
+
+class TestResumeRecovery:
+    """Resume must retry failed/blocked runs, not just re-render the report."""
+
+    def test_resume_retries_blocked_generation(self, workspace_root: Path) -> None:
+        request = _request(workspace_root, source="repos/safe", function="safe_parse", loops=3)
+        # First run: driver unavailable -> BLOCKED before any harness is made.
+        controller = _controller(
+            workspace_root, request, [_valid_payload("safe", "safe_parse")], run_id="run-recv-1"
+        )
+        controller.driver.unavailable = True
+        state = controller.run()
+        controller.close()
+        assert state.terminal_status is TerminalStatus.BLOCKED
+        run_dir = ArtifactStore(workspace_root, "safe", "run-recv-1").run_dir
+        assert not list((run_dir / "iterations").glob("loop-*/candidate"))
+
+        # Resume with a working driver: must continue generation -> verified.
+        resumed = _controller(
+            workspace_root,
+            request,
+            [_valid_payload("safe", "safe_parse")],
+            run_id="run-recv-1",
+            resume=True,
+        )
+        state2 = resumed.run()
+        resumed.close()
+        assert state2.terminal_status is TerminalStatus.HARNESS_VERIFIED
+        assert state2.generation_loop == 1
+        events = (run_dir / "events.jsonl").read_text(encoding="utf-8")
+        assert "run:resumed" in events
+        assert list((run_dir / "iterations").glob("loop-*/candidate"))
+
+    def test_resume_retries_failed_generation(self, workspace_root: Path) -> None:
+        request = _request(workspace_root, source="repos/safe", function="safe_parse", loops=3)
+        controller = _controller(
+            workspace_root, request, [_valid_payload("safe", "safe_parse")], run_id="run-recv-2"
+        )
+        controller.driver.fail_after = 0  # GenerationFailure on the first call
+        state = controller.run()
+        controller.close()
+        assert state.terminal_status is TerminalStatus.FAILED
+
+        resumed = _controller(
+            workspace_root,
+            request,
+            [_valid_payload("safe", "safe_parse")],
+            run_id="run-recv-2",
+            resume=True,
+        )
+        state2 = resumed.run()
+        resumed.close()
+        assert state2.terminal_status is TerminalStatus.HARNESS_VERIFIED
+
+    def test_budget_exhausted_failed_not_recovered(self, workspace_root: Path) -> None:
+        request = _request(workspace_root, source="repos/safe", function="safe_parse", loops=1)
+        controller = _controller(
+            workspace_root, request, [_broken_payload("safe", "safe_parse")], run_id="run-recv-3"
+        )
+        state = controller.run()
+        controller.close()
+        assert state.terminal_status is TerminalStatus.FAILED  # budget exhausted
+
+        resumed = _controller(
+            workspace_root,
+            request,
+            [_valid_payload("safe", "safe_parse")],
+            run_id="run-recv-3",
+            resume=True,
+        )
+        state2 = resumed.run()
+        resumed.close()
+        # Budget-exhausted FAILED stays terminal; resume only re-renders.
+        assert state2.terminal_status is TerminalStatus.FAILED
+        assert state2.generation_loop == 1

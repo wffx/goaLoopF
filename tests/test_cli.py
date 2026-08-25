@@ -244,7 +244,9 @@ class TestModelOverrides:
         import os
 
         run_id = "run-cli-override"
-        _make_run(workspace_root, run_id, terminal=TerminalStatus.BLOCKED)
+        # A terminal run that must NOT be recovered (otherwise resume would try
+        # a real model call with the injected test key).
+        _make_run(workspace_root, run_id, terminal=TerminalStatus.NEEDS_INPUT)
         monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
         result = runner.invoke(
             app,

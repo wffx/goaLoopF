@@ -50,6 +50,12 @@ class GenerationMixin:
             self.state is not None and self.goal is not None and self.preprocess is not None and self.store is not None
         )
         loop = self.state.generation_loop + 1
+        if loop > self.request.max_generation_loops:
+            self._terminate(
+                TerminalStatus.FAILED,
+                f"generation loop budget exhausted after {self.request.max_generation_loops} loop(s)",
+            )
+            return
 
         try:
             artifacts = self.driver.generate_artifacts(

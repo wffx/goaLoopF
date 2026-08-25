@@ -212,10 +212,14 @@ class DeepSeekHarnessDriver:
             raise
         except Exception as exc:
             raise DriverUnavailable(f"SDK call failed: {exc}") from exc
-        if result.finish_reason in ("error", "max-tokens") and not result.final_response.strip():
+        if result.finish_reason == "error" and not result.final_response.strip():
+            # Endpoint/runtime failure (auth, rate limit, network, ...) is a
+            # retryable environment condition, not an invalid model output.
             detail = _extract_turn_error(getattr(result, "events", []), getattr(result, "notifications", []))
             suffix = f": {detail}" if detail else ""
-            raise GenerationFailure(f"model turn ended with {result.finish_reason} and no response{suffix}")
+            raise DriverUnavailable(f"model turn ended with error and no response{suffix}")
+        if result.finish_reason == "max-tokens" and not result.final_response.strip():
+            raise GenerationFailure("model turn ended with max-tokens and no response")
         return str(result.final_response)
 
     def _coerce(
