@@ -379,3 +379,26 @@ class TestStatusReason:
         result = runner.invoke(app, ["status", "--run-id", run_id, "--workspace", str(workspace_root)])
         assert result.exit_code == 0
         assert "reason: cmake configure failed" in result.output
+
+
+class TestNoCandidateWarning:
+    def test_status_warns_when_no_harness(self, workspace_root: Path) -> None:
+        run_id = "run-no-candidate"
+        run_dir = _make_run(workspace_root, run_id, terminal=TerminalStatus.BLOCKED)
+        (run_dir / "validation.json").write_text(
+            json.dumps({"run_id": run_id, "status": "blocked", "reason": "model_api_key missing"}),
+            encoding="utf-8",
+        )
+        result = runner.invoke(app, ["status", "--run-id", run_id, "--workspace", str(workspace_root)])
+        assert result.exit_code == 0
+        assert "未生成任何 harness 候选" in result.output
+
+    def test_status_no_warning_when_harness_exists(self, workspace_root: Path) -> None:
+        run_id = "run-with-candidate"
+        run_dir = _make_run(workspace_root, run_id, terminal=TerminalStatus.BLOCKED)
+        candidate = run_dir / "iterations" / "loop-01" / "candidate"
+        candidate.mkdir(parents=True)
+        (candidate / "harness.c").write_text("int main(){}", encoding="utf-8")
+        result = runner.invoke(app, ["status", "--run-id", run_id, "--workspace", str(workspace_root)])
+        assert result.exit_code == 0
+        assert "未生成任何 harness 候选" not in result.output

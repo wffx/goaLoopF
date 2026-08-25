@@ -368,7 +368,20 @@ def _echo_state(state: RunState, *, run_dir: Path) -> None:
     if reason:
         typer.echo(f"[goaloop] reason: {reason}")
     typer.echo(f"[goaloop] artifacts: {run_dir}")
+    if state.terminal_status is not None and not _has_candidates(run_dir):
+        typer.echo(
+            "[goaloop] 注意: 该 run 未生成任何 harness 候选（iterations/ 为空），"
+            "原因见上方 reason。常见原因: 预处理失败（源码/目标函数/构建目录/凭据）"
+            "或模型调用失败。"
+        )
     typer.echo("[goaloop] 定位: goaloop report --run-id <id> 看完整报告; 事件日志: " + str(run_dir / "events.jsonl"))
+
+
+def _has_candidates(run_dir: Path) -> bool:
+    iterations = run_dir / "iterations"
+    if not iterations.is_dir():
+        return False
+    return any(iterations.glob("loop-*/candidate"))
 
 
 def _terminal_reason(run_dir: Path) -> str | None:
