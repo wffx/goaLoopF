@@ -354,3 +354,49 @@ class TestCustomModelSupport:
         assert captured.get("base_url") == "https://proxy.example/v1"
         assert captured.get("provider") == "deepseek-official"
         driver.close()
+
+
+class TestTurnErrorExtraction:
+    def test_extracts_reason_fields(self) -> None:
+        from goaloop.driver import _extract_turn_error
+
+        events = [
+            {"type": "assistant/message", "data": {"message": {"content": []}}},
+            {
+                "type": "turn/end",
+                "data": {"reason": {"kind": "error", "message": "HTTP 401", "detail": "invalid api key"}},
+            },
+        ]
+        detail = _extract_turn_error(events, [])
+        assert "401" in detail
+        assert "invalid api key" in detail
+
+    def test_extracts_error_notification(self) -> None:
+        from types import SimpleNamespace
+
+        from goaloop.driver import _extract_turn_error
+
+        events = [{"type": "turn/end", "data": {"reason": {"kind": "error"}}}]
+        notifications = [
+            SimpleNamespace(method="model/error", payload={"status": 429, "message": "rate limited"})
+        ]
+        detail = _extract_turn_error(events, notifications)
+        assert "429" in detail
+        assert "rate limited" in detail
+
+    def test_no_detail_returns_none(self) -> None:
+        from goaloop.driver import _extract_turn_error
+
+        assert _extract_turn_error([], []) is None
+        assert _extract_turn_error([{"type": "turn/end", "data": {"reason": {"kind": "error"}}}], []) is None
+
+    def test_error_reason_message_includes_detail(self) -> None:
+        driver = _real_driver()
+        events = [
+            {"type": "turn/end", "data": {"reason": {"kind": "error", "message": "HTTP 429", "detail": "rate limited"}}}
+        ]
+        harness = FakeHarness([""], finish_reason="error")
+        harness.events = events  # type: ignore[attr-defined]
+        driver._harness = harness
+        with pytest.raises(GenerationFailure, match="HTTP 429"):
+            driver.generate_artifacts(goal=_goal(), preprocess=_preprocess(), feedback=None)

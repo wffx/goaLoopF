@@ -213,7 +213,9 @@ class DeepSeekHarnessDriver:
         except Exception as exc:
             raise DriverUnavailable(f"SDK call failed: {exc}") from exc
         if result.finish_reason in ("error", "max-tokens") and not result.final_response.strip():
-            raise GenerationFailure(f"model turn ended with {result.finish_reason} and no response")
+            detail = _extract_turn_error(getattr(result, "events", []), getattr(result, "notifications", []))
+            suffix = f": {detail}" if detail else ""
+            raise GenerationFailure(f"model turn ended with {result.finish_reason} and no response{suffix}")
         return str(result.final_response)
 
     def _coerce(
@@ -302,6 +304,46 @@ class ScriptedGenerationDriver:
 
     def close(self) -> None:
         self.closed = True
+
+
+def _extract_turn_error(events: list[Any], notifications: list[Any]) -> str | None:
+    """Best-effort detail from the SDK turn/end reason or error notifications.
+
+    The SDK's ``finish_reason`` is only the ``kind``; the underlying cause
+    (HTTP status, invalid key, unknown model, ...) lives in the full
+    ``data.reason`` of the last turn/end event or in error notifications.
+    """
+    for event in reversed(events):
+        if not isinstance(event, dict) or event.get("type") != "turn/end":
+            continue
+        data = event.get("data")
+        reason = data.get("reason") if isinstance(data, dict) else None
+        if not isinstance(reason, dict):
+            continue
+        fields = {
+            k: v
+            for k, v in reason.items()
+            if k != "kind" and v not in (None, "", [], {})
+        }
+        if fields:
+            try:
+                return json.dumps(fields, ensure_ascii=False)[:500]
+            except (TypeError, ValueError):
+                return str(fields)[:500]
+    for notification in notifications:
+        method = getattr(notification, "method", None)
+        if method is None and isinstance(notification, dict):
+            method = notification.get("method")
+        if method and "error" in str(method).lower():
+            payload = getattr(notification, "payload", None)
+            if payload is None and isinstance(notification, dict):
+                payload = notification.get("payload")
+            if isinstance(payload, dict):
+                try:
+                    return json.dumps(payload, ensure_ascii=False)[:500]
+                except (TypeError, ValueError):
+                    return str(payload)[:500]
+    return None
 
 
 def extract_json(text: str) -> dict[str, Any]:
