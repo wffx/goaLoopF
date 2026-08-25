@@ -306,3 +306,44 @@ class TestProfileApiKey:
         )
         assert result.exit_code == 0
         assert "profile api_key" in result.output
+
+
+class TestProviderBaseUrl:
+    def test_provider_base_url_env_convention(self) -> None:
+        from goaloop.cli import _provider_base_url_env
+
+        assert _provider_base_url_env("custom-gateway") == "CUSTOM_GATEWAY_BASE_URL"
+        assert _provider_base_url_env("openai") == "OPENAI_BASE_URL"
+        assert _provider_base_url_env("deepseek-official") == "DEEPSEEK_OFFICIAL_BASE_URL"
+
+    def test_cli_base_url_injects_provider_env(self, monkeypatch) -> None:
+        from goaloop.cli import _apply_model_overrides
+        from goaloop.models import ModelProfile
+
+        monkeypatch.delenv("CUSTOM_GATEWAY_BASE_URL", raising=False)
+        base = ModelProfile(name="pi-ai-custom", provider="custom-gateway", model="local-model")
+        _apply_model_overrides(base, None, "http://my-gateway:9000/v1", None)
+        assert os.environ.get("CUSTOM_GATEWAY_BASE_URL") == "http://my-gateway:9000/v1"
+
+    def test_profile_base_url_injects_provider_env(self, monkeypatch) -> None:
+        from goaloop.cli import _apply_model_overrides
+        from goaloop.models import ModelProfile
+
+        monkeypatch.delenv("CUSTOM_GATEWAY_BASE_URL", raising=False)
+        base = ModelProfile(
+            name="pi-ai-custom",
+            provider="custom-gateway",
+            model="local-model",
+            base_url="http://profile-host:7000/v1",
+        )
+        _apply_model_overrides(base, None, None, None)
+        assert os.environ.get("CUSTOM_GATEWAY_BASE_URL") == "http://profile-host:7000/v1"
+
+    def test_pi_ai_custom_profile_has_base_url(self) -> None:
+        import tomllib
+        from pathlib import Path
+
+        data = tomllib.loads(
+            Path("model-profiles/pi-ai-custom.toml").read_text(encoding="utf-8")
+        )
+        assert data["base_url"] == "http://localhost:8000/v1"

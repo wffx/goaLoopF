@@ -384,12 +384,28 @@ def _apply_model_overrides(
     update: dict[str, Any] = {}
     if model_name is not None:
         update["model"] = model_name
+    effective_base_url = base_url if base_url is not None else model.base_url
     if base_url is not None:
         update["base_url"] = base_url
+    if effective_base_url is not None:
+        # pi-ai reads each provider's endpoint from <PROVIDER>_BASE_URL (e.g.
+        # CUSTOM_GATEWAY_BASE_URL); inject so profile/CLI base_url works for
+        # pi-ai routes too, not just the deepseek adapter.
+        os.environ[_provider_base_url_env(model.provider)] = effective_base_url
     effective_key = api_key if api_key is not None else model.api_key
     if effective_key is not None:
         os.environ[model.api_key_env] = effective_key
     return model.model_copy(update=update)
+
+
+def _provider_base_url_env(provider: str) -> str:
+    """Environment variable a pi-ai route reads its baseURL from.
+
+    Naming convention: provider name uppercased with '-' -> '_' plus _BASE_URL,
+    e.g. provider "custom-gateway" -> CUSTOM_GATEWAY_BASE_URL (the pi-ai cordis
+    already reads that variable for the custom-gateway route).
+    """
+    return provider.upper().replace("-", "_") + "_BASE_URL"
 
 
 def _verbose_event_printer(enabled: bool) -> Callable[[RunEvent], None] | None:

@@ -30,6 +30,10 @@ from .generation import GenerationMixin
 from .report import ReportMixin
 
 PREPROCESS_FILENAME = "preprocess.json"
+
+
+def _provider_base_url_env(provider: str) -> str:
+    return provider.upper().replace("-", "_") + "_BASE_URL"
 GOAL_FILENAME = "goal.json"
 EXECUTIONS_DIR = "executions"
 
@@ -255,10 +259,18 @@ class RunController(GenerationMixin, ReportMixin):
         self._enter_phase(Phase.HARNESS_GENERATION)
 
     def _ensure_model_credential(self) -> None:
-        """Make a profile-stored api_key visible to readiness checks and the
-        SDK subprocess by injecting it into api_key_env for this process."""
-        if self.model_profile is not None and self.model_profile.api_key:
+        """Make profile-stored api_key and base_url visible to the SDK runtime.
+
+        The key is injected into api_key_env; the endpoint is injected into the
+        pi-ai <PROVIDER>_BASE_URL variable so profile base_url works for pi-ai
+        routes as well as the deepseek adapter.
+        """
+        if self.model_profile is None:
+            return
+        if self.model_profile.api_key:
             os.environ[self.model_profile.api_key_env] = self.model_profile.api_key
+        if self.model_profile.base_url:
+            os.environ[_provider_base_url_env(self.model_profile.provider)] = self.model_profile.base_url
 
     def _seed_corpus(self) -> None:
         """Copy user-provided seed inputs into the run's corpus before fuzzing."""
