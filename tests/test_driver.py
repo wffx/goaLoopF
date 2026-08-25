@@ -195,6 +195,8 @@ class FakeHarness:
         return SimpleNamespace(
             final_response=self.responses.pop(0),
             finish_reason=self.finish_reason,
+            events=getattr(self, "events", []),
+            notifications=getattr(self, "notifications", []),
         )
 
     def close(self) -> None:
