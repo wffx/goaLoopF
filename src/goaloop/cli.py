@@ -364,7 +364,37 @@ def _echo_state(state: RunState, *, run_dir: Path) -> None:
     typer.echo(f"[goaloop] phase: {state.phase.value}")
     typer.echo(f"[goaloop] generation loops used: {state.generation_loop}")
     typer.echo(f"[goaloop] status: {state.terminal_status.value if state.terminal_status else 'in_progress'}")
+    reason = _terminal_reason(run_dir)
+    if reason:
+        typer.echo(f"[goaloop] reason: {reason}")
     typer.echo(f"[goaloop] artifacts: {run_dir}")
+    typer.echo("[goaloop] 定位: goaloop report --run-id <id> 看完整报告; 事件日志: " + str(run_dir / "events.jsonl"))
+
+
+def _terminal_reason(run_dir: Path) -> str | None:
+    """Specific terminal reason: the run:terminal event always carries it;
+    validation.json is a fallback (older runs may store the bare status word)."""
+    events_path = run_dir / "events.jsonl"
+    if events_path.is_file():
+        try:
+            for line in reversed(events_path.read_text(encoding="utf-8").splitlines()):
+                if not line.strip():
+                    continue
+                event = json.loads(line)
+                if event.get("kind") == "run:terminal":
+                    reason = event.get("payload", {}).get("reason")
+                    return str(reason) if reason else None
+        except (OSError, ValueError):
+            pass
+    validation_path = run_dir / "validation.json"
+    if validation_path.is_file():
+        try:
+            reason = json.loads(validation_path.read_text(encoding="utf-8")).get("reason")
+            if reason and reason != "in_progress":
+                return str(reason)
+        except (OSError, ValueError):
+            pass
+    return None
 
 
 def _apply_model_overrides(

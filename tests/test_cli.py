@@ -347,3 +347,33 @@ class TestProviderBaseUrl:
             Path("model-profiles/pi-ai-custom.toml").read_text(encoding="utf-8")
         )
         assert data["base_url"] == "http://localhost:8000/v1"
+
+
+class TestStatusReason:
+    def test_status_shows_terminal_reason(self, workspace_root: Path) -> None:
+        run_id = "run-cli-reason"
+        run_dir = _make_run(workspace_root, run_id, terminal=TerminalStatus.FAILED)
+        (run_dir / "validation.json").write_text(
+            json.dumps(
+                {"run_id": run_id, "status": "failed", "reason": "generation loop budget exhausted after 3 loop(s)"}
+            ),
+            encoding="utf-8",
+        )
+        result = runner.invoke(app, ["status", "--run-id", run_id, "--workspace", str(workspace_root)])
+        assert result.exit_code == 0
+        assert "reason: generation loop budget exhausted" in result.output
+        assert "goaloop report --run-id" in result.output
+        assert "events.jsonl" in result.output
+
+    def test_status_falls_back_to_events(self, workspace_root: Path) -> None:
+        run_id = "run-cli-events-reason"
+        run_dir = _make_run(workspace_root, run_id, terminal=TerminalStatus.BLOCKED)
+        # no validation.json; reason only in events.jsonl
+        (run_dir / "events.jsonl").write_text(
+            json.dumps({"kind": "run:terminal", "payload": {"status": "blocked", "reason": "cmake configure failed"}})
+            + "\n",
+            encoding="utf-8",
+        )
+        result = runner.invoke(app, ["status", "--run-id", run_id, "--workspace", str(workspace_root)])
+        assert result.exit_code == 0
+        assert "reason: cmake configure failed" in result.output

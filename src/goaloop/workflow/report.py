@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -127,6 +128,11 @@ class ReportMixin:
             reason = self.last_crash_analysis.reason
         if self.preprocess is not None and self.preprocess.reason and self.last_execution is None:
             reason = self.preprocess.reason
+        if reason == status.value:
+            # Keep the specific reason recorded at terminate time (e.g. "loop
+            # budget exhausted after 3 loop(s): ...") instead of the bare
+            # status word.
+            reason = self._terminal_reason() or reason
 
         report_path = write_markdown_report(
             run_dir=self.store.run_dir,
@@ -154,6 +160,25 @@ class ReportMixin:
             },
         )
         self._save_checkpoint()
+
+    def _terminal_reason(self: ControllerState) -> str | None:
+        """Read the reason recorded by the last run:terminal event."""
+        if self.store is None:
+            return None
+        events_path = self.store.events_path
+        if not events_path.is_file():
+            return None
+        for line in reversed(events_path.read_text(encoding="utf-8").splitlines()):
+            if not line.strip():
+                continue
+            try:
+                event = json.loads(line)
+            except ValueError:
+                continue
+            if event.get("kind") == "run:terminal":
+                reason = event.get("payload", {}).get("reason")
+                return str(reason) if reason else None
+        return None
 
     def _write_metrics(self: ControllerState, report_path: Path) -> None:
         assert self.state is not None and self.store is not None

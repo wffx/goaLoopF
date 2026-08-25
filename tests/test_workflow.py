@@ -227,6 +227,11 @@ class TestRegeneration:
         assert state.terminal_status is TerminalStatus.FAILED
         assert state.generation_loop == 2
         assert "budget" in _report_text(workspace_root, "run-exhaust-1")
+        # validation.json must keep the specific reason, not the bare status
+        validation = json.loads(
+            (ArtifactStore(workspace_root, "safe", "run-exhaust-1").run_dir / "validation.json").read_text()
+        )
+        assert "budget exhausted" in validation["reason"]
 
 
 def _report_text(workspace_root: Path, run_id: str) -> str:
