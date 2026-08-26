@@ -54,6 +54,7 @@ goaloop run --source repos/cJSON-1.7.17 --function cJSON_Parse --profile default
 | [contracts.md](contracts.md) | Pydantic 数据契约（全模型、字段关系、约束） |
 | [cli.md](cli.md) | CLI 命令参考与参数说明 |
 | [testing.md](testing.md) | 测试结构、fixture 设计、端到端覆盖 |
+| [context-optimization.md](context-optimization.md) | 按需上下文优化设计草案：声明提取 + 模型按需请求闭环 |
 
 ## 关键设计决策速览
 
