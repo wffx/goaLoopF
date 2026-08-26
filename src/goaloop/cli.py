@@ -435,6 +435,14 @@ def _apply_model_overrides(
         # CUSTOM_GATEWAY_BASE_URL); inject so profile/CLI base_url works for
         # pi-ai routes too, not just the deepseek adapter.
         os.environ[_provider_base_url_env(model.provider)] = effective_base_url
+    effective_model = model_name if model_name is not None else model.model
+    if model_name is not None:
+        update["model"] = model_name
+    # pi-ai's custom-gateway route resolves the model against a catalog read
+    # from <PROVIDER>_MODEL (e.g. CUSTOM_GATEWAY_MODEL); without this injection
+    # a profile/CLI model that differs from the catalog default fails with
+    # "unknown model".
+    os.environ[_provider_model_env(model.provider)] = effective_model
     effective_key = api_key if api_key is not None else model.api_key
     if effective_key is not None:
         os.environ[model.api_key_env] = effective_key
@@ -449,6 +457,11 @@ def _provider_base_url_env(provider: str) -> str:
     already reads that variable for the custom-gateway route).
     """
     return provider.upper().replace("-", "_") + "_BASE_URL"
+
+
+def _provider_model_env(provider: str) -> str:
+    """Environment variable a pi-ai route reads its model catalog from."""
+    return provider.upper().replace("-", "_") + "_MODEL"
 
 
 def _verbose_event_printer(enabled: bool) -> Callable[[RunEvent], None] | None:
