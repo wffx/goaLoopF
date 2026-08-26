@@ -23,8 +23,22 @@ from .models import (
 
 SOURCE_SUFFIXES = {".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx"}
 BUILD_NAMES = {"CMakeLists.txt", "Makefile", "meson.build", "BUILD", "BUILD.bazel"}
-MAX_CONTEXT_FILE_BYTES = 64 * 1024
+# Per-tier per-file caps for the source context embedded in generation
+# prompts. Definition files (the target function's body lives there) get the
+# most room; include-closure and same-basename headers get less; build files
+# and caller/reference files the least.
+MAX_TARGET_FILE_BYTES = 64 * 1024
+MAX_DEPENDENCY_FILE_BYTES = 32 * 1024
+MAX_BUILD_FILE_BYTES = 16 * 1024
+MAX_REFERENCE_FILE_BYTES = 16 * 1024
+# Fallback total context budget when the caller does not pass one; the
+# controller always derives it from FuzzRunRequest.max_context_kb.
 MAX_CONTEXT_TOTAL_BYTES = 256 * 1024
+# Quoted-include parser used to build the dependency closure of target files.
+_INCLUDE_QUOTED_RE = re.compile(r'^\s*#\s*include\s+"([^"]+)"', re.MULTILINE)
+# A definition is `symbol(` ... `)` followed (possibly across lines) by a
+# body opening brace; a mere call site or declaration does not qualify.
+_DEFINITION_RE_TEMPLATE = r"(?<![\w:]){symbol}\s*\([^;{{}}]*\)\s*\{{"
 
 
 def preprocess_request(
@@ -35,6 +49,7 @@ def preprocess_request(
     *,
     check_runtime: bool = True,
     api_key_env: str = "DEEPSEEK_API_KEY",
+    max_context_bytes: int | None = None,
 ) -> PreprocessResult:
     workspace_root = workspace_root.resolve()
     source_root = _resolve_source(workspace_root, request.source)
@@ -123,7 +138,17 @@ def preprocess_request(
         )
 
     language = _detect_language(request.language, matching, files)
-    contexts = _collect_context(source_root, matching, files)
+    # The source-context budget comes from the request (CLI --max-context-kb);
+    # an explicit override wins when provided (used by tests).
+    if max_context_bytes is None:
+        max_context_bytes = request.max_context_kb * 1024
+    contexts = _collect_context(
+        source_root,
+        matching,
+        files,
+        max_context_bytes,
+        target_symbol=request.function,
+    )
     signatures = _candidate_signatures(matching, request.function)
     capabilities = [
         Capability(
@@ -215,22 +240,49 @@ def _detect_language(requested: Language, matches: list[Path], files: list[Path]
     return Language.CPP if any(path.suffix.lower() in cpp_suffixes for path in files) else Language.C
 
 
-def _collect_context(root: Path, matches: list[Path], files: list[Path]) -> list[SourceContext]:
-    ordered: list[Path] = []
-    for path in [*matches, *(item for item in files if item.name in BUILD_NAMES), *files]:
-        if path not in ordered:
-            ordered.append(path)
+def _collect_context(
+    root: Path,
+    matches: list[Path],
+    files: list[Path],
+    max_context_bytes: int | None = None,
+    target_symbol: str | None = None,
+) -> list[SourceContext]:
+    """Collect source context by relevance, not by directory sweep.
+
+    Files are selected in tiers, each with its own per-file cap:
+
+    1. definition files (the target function's body) — 64 KiB each, with a
+       symbol-window truncation for oversized files;
+    2. their quoted-include closure (transitively) and same-basename
+       headers — 32 KiB each;
+    3. build files (CMakeLists.txt / Makefile / ...) — 16 KiB each;
+    4. caller/reference files (mention the symbol without defining it,
+       e.g. tests) — 16 KiB each, last.
+
+    Unrelated files are never included: in large projects a blanket sweep
+    consumed the whole budget on code the model does not need, blowing up
+    preprocess.json past the model's input-token limit.
+    """
+    budget = MAX_CONTEXT_TOTAL_BYTES if max_context_bytes is None else max_context_bytes
+    definitions, references = _definition_files(matches, target_symbol)
+    windowed = {path.resolve() for path in definitions}
+    selected = _select_context_files(root, definitions, references, files, target_symbol)
     result: list[SourceContext] = []
     total = 0
-    for path in ordered:
-        if total >= MAX_CONTEXT_TOTAL_BYTES:
+    for path, per_file_cap in selected:
+        if total >= budget:
             break
         try:
             raw = path.read_bytes()
         except OSError:
             continue
-        available = min(MAX_CONTEXT_FILE_BYTES, MAX_CONTEXT_TOTAL_BYTES - total)
-        content_bytes = raw[:available]
+        available = min(per_file_cap, budget - total)
+        content_bytes = raw
+        if len(content_bytes) > available:
+            if target_symbol is not None and path in windowed:
+                content_bytes = _symbol_window(raw, target_symbol, cap=available)
+            else:
+                content_bytes = raw[:available]
         total += len(content_bytes)
         result.append(
             SourceContext(
@@ -241,6 +293,153 @@ def _collect_context(root: Path, matches: list[Path], files: list[Path]) -> list
             )
         )
     return result
+
+
+def _definition_files(matches: list[Path], symbol: str | None) -> tuple[list[Path], list[Path]]:
+    """Split symbol-mentioning files into definition vs reference files.
+
+    A definition file is one where the symbol appears with a body brace
+    (``symbol(...) {``). Files that merely declare or call the function are
+    references: they are much less useful to the harness model and must not
+    crowd out the definition. Without a symbol, every match is treated as a
+    definition (head truncation only).
+    """
+    if not symbol:
+        return list(matches), []
+    pattern = re.compile(_DEFINITION_RE_TEMPLATE.format(symbol=re.escape(symbol)))
+    definitions: list[Path] = []
+    references: list[Path] = []
+    for path in matches:
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            references.append(path)
+            continue
+        (definitions if pattern.search(text) else references).append(path)
+    return definitions, references
+
+
+def _select_context_files(
+    root: Path,
+    definitions: list[Path],
+    references: list[Path],
+    files: list[Path],
+    symbol: str | None,
+) -> list[tuple[Path, int]]:
+    """Order candidate files by relevance, returning (path, per-file cap)."""
+    selected: list[tuple[Path, int]] = []
+    seen: set[Path] = set()
+
+    def add(path: Path, cap: int) -> None:
+        resolved = path.resolve()
+        if resolved in seen:
+            return
+        seen.add(resolved)
+        selected.append((resolved, cap))
+
+    for path in definitions:
+        add(path, MAX_TARGET_FILE_BYTES)
+    for path in _include_closure(root, definitions, files):
+        add(path, MAX_DEPENDENCY_FILE_BYTES)
+    for path in _same_basename_headers(definitions, files):
+        add(path, MAX_DEPENDENCY_FILE_BYTES)
+    for path in sorted(item for item in files if item.name in BUILD_NAMES):
+        add(path, MAX_BUILD_FILE_BYTES)
+    for path in references:
+        add(path, MAX_REFERENCE_FILE_BYTES)
+    return selected
+
+
+def _include_closure(root: Path, seeds: list[Path], files: list[Path]) -> list[Path]:
+    """Transitive closure of quoted #include targets of the seed files.
+
+    Only files inside the source root count; system/angle-bracket includes
+    are ignored. A name lookup over the collected source files is the last
+    resort for includes that resolve via include dirs rather than relative
+    paths.
+    """
+    root = root.resolve()
+    by_name: dict[str, Path] = {}
+    for path in files:
+        if path.suffix.lower() in SOURCE_SUFFIXES:
+            by_name.setdefault(path.name, path)
+    found: set[Path] = set()
+    visited: set[Path] = set()
+    queue = [path.resolve() for path in seeds if path.suffix.lower() in SOURCE_SUFFIXES]
+    while queue:
+        current = queue.pop(0)
+        if current in visited:
+            continue
+        visited.add(current)
+        try:
+            text = current.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for include in _INCLUDE_QUOTED_RE.findall(text):
+            target = _resolve_include(root, current.parent, include, by_name)
+            if target is None or target in visited:
+                continue
+            queue.append(target)
+            found.add(target)
+    return sorted(found, key=lambda path: path.as_posix())
+
+
+def _resolve_include(root: Path, from_dir: Path, include: str, by_name: dict[str, Path]) -> Path | None:
+    for candidate in (from_dir / include, root / include):
+        resolved = candidate.resolve()
+        if resolved.is_relative_to(root) and resolved.is_file():
+            return resolved
+    named = by_name.get(Path(include).name)
+    if named is not None:
+        resolved = named.resolve()
+        if resolved.is_relative_to(root):
+            return resolved
+    return None
+
+
+def _same_basename_headers(matches: list[Path], files: list[Path]) -> list[Path]:
+    """Headers sharing the basename of a target file (e.g. cJSON.c -> cJSON.h).
+
+    Covers implementations that declare their API in a header they do not
+    include themselves; also the reason the file contains the symbol may be a
+    definition while the header only carries the declaration without it.
+    """
+    by_stem: dict[str, Path] = {}
+    for path in files:
+        if path.suffix.lower() in SOURCE_SUFFIXES and path.suffix.lower().startswith(".h"):
+            by_stem.setdefault(path.stem, path)
+    headers: set[Path] = set()
+    for match in matches:
+        header = by_stem.get(match.stem)
+        if header is not None and header.resolve() != match.resolve():
+            headers.add(header.resolve())
+    return sorted(headers, key=lambda path: path.as_posix())
+
+
+def _symbol_window(raw: bytes, symbol: str, *, cap: int) -> bytes:
+    """Truncate an oversized target file around the symbol instead of the head.
+
+    Keeps a small head (includes/typedefs, up to 4 KiB) plus a window centered
+    on the last ``symbol(`` occurrence, so the model sees the function
+    definition even when it sits deep inside a huge file. Falls back to the
+    file head when the symbol never appears with an opening paren.
+    """
+    if len(raw) <= cap:
+        return raw
+    text = raw.decode("utf-8", errors="replace")
+    pattern = re.compile(rf"(?<![\w:]){re.escape(symbol)}\s*\(")
+    positions = [match.start() for match in pattern.finditer(text)]
+    if not positions:
+        return raw[:cap]
+    head = min(4096, cap // 4)
+    window_cap = cap - head
+    pos = positions[-1]
+    if pos < head:  # symbol already inside the head: keep the head
+        return raw[:cap]
+    start = max(0, pos - window_cap // 2)
+    end = min(len(text), start + window_cap)
+    window = text[start:end].encode("utf-8", errors="replace")[:window_cap]
+    return raw[:head] + b"\n/* ... goaloop truncated to symbol window ... */\n" + window
 
 
 def _candidate_signatures(matches: list[Path], symbol: str) -> list[str]:

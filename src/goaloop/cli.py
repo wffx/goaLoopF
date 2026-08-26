@@ -57,6 +57,19 @@ def run(
     model_profile: str = typer.Option("default", "--model-profile", help="model profile name"),
     max_generation_loops: int = typer.Option(5, "--max-generation-loops", min=1, max=20),
     fuzz_seconds: int = typer.Option(600, "--fuzz-seconds", min=1, max=86400),
+    max_context_kb: int = typer.Option(
+        96,
+        "--max-context-kb",
+        min=8,
+        max=1024,
+        help="source-context budget embedded in each generation prompt (KiB); lower it to cut input tokens",
+    ),
+    max_input_tokens: int | None = typer.Option(
+        None,
+        "--max-input-tokens",
+        min=1024,
+        help="fail fast when a prompt is estimated to exceed this many input tokens (default: model profile)",
+    ),
     seed_corpus: Path | None = typer.Option(
         None, "--seed-corpus", help="directory of seed inputs copied into the run corpus"
     ),
@@ -87,6 +100,7 @@ def run(
         model_profile=model_profile,
         max_generation_loops=max_generation_loops,
         fuzz_seconds=fuzz_seconds,
+        max_context_kb=max_context_kb,
         seed_corpus=seed_corpus,
         build_dir=build_dir,
     )
@@ -98,6 +112,7 @@ def run(
         provider=model.provider,
         model=model.model,
         max_tokens=model.max_tokens,
+        max_input_tokens=max_input_tokens or model.max_input_tokens,
         cordis=model.cordis,
         base_url=model.base_url,
         workspace_root=ws,
@@ -129,6 +144,12 @@ def resume(
     model_name: str | None = typer.Option(None, "--model-name", help="override model id"),
     base_url: str | None = typer.Option(None, "--base-url", help="override model endpoint"),
     api_key: str | None = typer.Option(None, "--api-key", help="override model credential"),
+    max_input_tokens: int | None = typer.Option(
+        None,
+        "--max-input-tokens",
+        min=1024,
+        help="fail fast when a prompt is estimated to exceed this many input tokens (default: model profile)",
+    ),
     verbose: bool = typer.Option(False, "--verbose", help="print live progress events"),
     workspace: Path | None = typer.Option(None, "--workspace"),
 ) -> None:
@@ -143,6 +164,7 @@ def resume(
         provider=model.provider,
         model=model.model,
         max_tokens=model.max_tokens,
+        max_input_tokens=max_input_tokens or model.max_input_tokens,
         cordis=model.cordis,
         base_url=model.base_url,
         workspace_root=ws,
@@ -285,6 +307,7 @@ def evaluate(
                 "model_profile": entry.get("model_profile", "default"),
                 "max_generation_loops": entry.get("max_generation_loops", 5),
                 "fuzz_seconds": entry.get("fuzz_seconds", 600),
+                "max_context_kb": entry.get("max_context_kb", 96),
                 "seed_corpus": entry.get("seed_corpus"),
                 "build_dir": entry.get("build_dir"),
             }
@@ -305,6 +328,7 @@ def evaluate(
                 provider=model.provider,
                 model=model.model,
                 max_tokens=model.max_tokens,
+                max_input_tokens=model.max_input_tokens,
                 cordis=model.cordis,
                 workspace_root=ws,
                 session_root=private_session,

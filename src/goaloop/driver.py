@@ -122,10 +122,12 @@ class DeepSeekHarnessDriver:
         session_root: Path | str,
         run_id: str,
         base_url: str | None = None,
+        max_input_tokens: int | None = None,
     ) -> None:
         self.provider = provider
         self.model = model
         self.max_tokens = max_tokens
+        self.max_input_tokens = max_input_tokens
         self.cordis = Path(cordis) if cordis is not None else None
         self.base_url = base_url
         self.workspace_root = Path(workspace_root).resolve()
@@ -133,6 +135,7 @@ class DeepSeekHarnessDriver:
         self.run_id = run_id
         self.format_retries = 0
         self._harness: Any = None
+        self._last_session_id: str | None = None
 
     def generate_artifacts(
         self,
@@ -148,14 +151,20 @@ class DeepSeekHarnessDriver:
             feedback=feedback,
             expected_loop=loop,
         )
-        first = self._run_prompt(prompt)
+        # One session per generation loop: the run-level session would keep the
+        # full history of every prompt (each one re-embedding the source
+        # context), so loop N would send N copies and overflow the model's
+        # input window. A fresh session per loop bounds the input to a single
+        # prompt; the structured feedback carries what changed between loops.
+        session_id = self._generation_session_id(loop)
+        first = self._run_prompt(prompt, session_id=session_id)
         try:
             return self._coerce(first, goal, loop, format_retry=0)
         except StaleResponseError as exc:
             raise GenerationFailure(f"stale model response rejected: {exc}") from exc
         except (json.JSONDecodeError, ValidationError, ValueError) as exc:
             retry_prompt = build_format_retry_prompt(prompt, exc, expected_loop=loop)
-            second = self._run_prompt(retry_prompt)
+            second = self._run_prompt(retry_prompt, session_id=session_id)
             self.format_retries += 1
             try:
                 return self._coerce(second, goal, loop, format_retry=1)
@@ -167,6 +176,8 @@ class DeepSeekHarnessDriver:
     def complete_goal(self, *, goal: GenerationGoal, summary: str) -> None:
         try:
             harness = self._open()
+            # Best-effort: send to the session where the model may have created
+            # its goal (the last generation loop), falling back to the run id.
             harness.run(
                 (
                     "The controller has completed the generation goal based on execution "
@@ -174,7 +185,7 @@ class DeepSeekHarnessDriver:
                     "If you created a goal for this run, mark it complete. Do not generate "
                     "any further artifacts."
                 ),
-                session_id=self.run_id,
+                session_id=self._last_session_id or self.run_id,
             )
         except Exception as exc:  # completion is best-effort; state is controller-owned
             raise DriverUnavailable(f"goal completion message failed: {exc}") from exc
@@ -204,10 +215,29 @@ class DeepSeekHarnessDriver:
             )
         return self._harness
 
-    def _run_prompt(self, prompt: str) -> str:
+    def _generation_session_id(self, loop: int) -> str:
+        return f"{self.run_id}-g{loop:02d}"
+
+    def _run_prompt(self, prompt: str, *, session_id: str) -> str:
+        estimated = estimate_tokens(prompt)
+        if self.max_input_tokens is not None:
+            # Guard before hitting the endpoint: a rejection arrives as a
+            # cryptic "input exceeds limit" error after a full upload, and the
+            # DSH runtime cannot compact a single oversized prompt. The
+            # estimate uses ~3 chars/token (an over-estimate for code), so a
+            # 90% threshold is a safety net, not an exact budget.
+            threshold = int(self.max_input_tokens * 0.9)
+            if estimated > threshold:
+                raise GenerationFailure(
+                    f"generation prompt is estimated at {estimated} input tokens, which exceeds the "
+                    f"configured model input window ({self.max_input_tokens} tokens; guard at {threshold}). "
+                    "Reduce the source context with --max-context-kb, or raise/adjust max_input_tokens "
+                    "in the model profile for a larger-window model."
+                )
         try:
             harness = self._open()
-            result = harness.run(prompt, session_id=self.run_id)
+            self._last_session_id = session_id
+            result = harness.run(prompt, session_id=session_id)
         except DriverUnavailable:
             raise
         except Exception as exc:
@@ -370,6 +400,16 @@ def extract_json(text: str) -> dict[str, Any]:
     return parsed
 
 
+def estimate_tokens(text: str) -> int:
+    """Rough input-token estimate for guard/telemetry purposes.
+
+    Uses ~3 characters per token, which over-estimates code-heavy prompts
+    (BPE tokenizers average 3.5-4 chars/token), so the estimate is
+    intentionally conservative for a fail-fast guard.
+    """
+    return max(1, len(text) // 3)
+
+
 def build_generation_prompt(
     *,
     goal: GenerationGoal,
@@ -382,7 +422,9 @@ def build_generation_prompt(
         redact(json.dumps(preprocess.model_dump(mode="json")), workspace_root),
         ensure_ascii=False,
     )
-    goal_json = json.dumps(goal.model_dump(mode="json"), ensure_ascii=False)
+    # latest_feedback is carried by the feedback argument below; excluding it
+    # from the goal dump avoids embedding the same feedback twice per prompt.
+    goal_json = json.dumps(goal.model_dump(mode="json", exclude={"latest_feedback"}), ensure_ascii=False)
     feedback_json = (
         json.dumps(feedback.model_dump(mode="json"), ensure_ascii=False) if feedback is not None else "(none)"
     )

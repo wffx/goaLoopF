@@ -28,6 +28,8 @@ goaloop run --source repos/<project> --function <symbol>
 | `--model-profile` | `default` | 模型 Profile 名称 |
 | `--max-generation-loops` | `5` | 1–20，模型生成/修订的最大轮数 |
 | `--fuzz-seconds` | `600` | 1–86400，每个候选的 libFuzzer 执行时长 |
+| `--max-context-kb` | `96` | 8–1024，注入每个生成提示词的源码上下文预算（KiB）。这是输入 token 的最大来源：降低它直接压缩每次模型输入（96 KiB ≈ 25–32K token） |
+| `--max-input-tokens` | Profile 值 | 输入窗口守卫：生成前估算提示词 token，超过该值 90% 时快速失败并给出可操作报错，而不是等端点返回晦涩的“输入超限”错误。默认取模型 Profile 的 `max_input_tokens` |
 | `--seed-corpus` | — | 可选：目录，其中的种子输入复制进 run corpus（跨 run 复用上一轮语料） |
 | `--build-dir` | — | 可选：CMake 工程目录（含 `CMakeLists.txt`）。控制器在该目录内构建并链接插桩静态库，模型不再猜构建参数 |
 | `--model-name` | Profile 值 | 覆盖模型 ID（如 `gpt-4o`、`deepseek-v4-pro`） |
@@ -118,6 +120,8 @@ goaloop evaluate suite.json --repetitions 3
 |---|---|---|
 | `provider` | `deepseek-official` | 适配器路由名。`deepseek-official` = dsh 内置 deepseek 适配器；pi-ai 适配器按 providers key（`openai`/`anthropic`/`deepseek`/... 或手写网关名） |
 | `model` | `deepseek-v4-pro` | 模型 ID，由所选适配器路由解析 |
+| `max_tokens` | — | 单次输出 token 上限（传给 SDK） |
+| `max_input_tokens` | — | 模型输入窗口（token）。goaloop 每次生成前估算提示词，超过其 90% 快速失败。默认 profile 设为 `131071`；换更大窗口模型时调大或删除 |
 | `cordis` | `cordis/goaloop.cordis.yml` | 使用的 Cordis 组合（deepseek 专用或 `goaloop.pi-ai.cordis.yml` 多 provider） |
 | `base_url` | — | 自定义端点（仅 deepseek 适配器生效，SDK 转 `DEEPSEEK_BASE_URL`） |
 | `api_key_env` | `DEEPSEEK_API_KEY` | 模型凭据所在环境变量（preprocess/doctor 按此检查） |
@@ -171,6 +175,45 @@ api_key = "sk-your-openai-key-here"   # 可选：明文凭据
 适配器：内置 catalog 路由（deepseek/openai/anthropic/google/groq/mistral/
 openrouter/xai）+ 手写 OpenAI 兼容网关。自定义网关端点/模型名可用
 `CUSTOM_GATEWAY_BASE_URL` / `CUSTOM_GATEWAY_MODEL` 环境变量覆盖，无需改文件。
+
+## 输入长度（token）优化
+
+“模型输入超过 131071 token”的根因与对策：
+
+- **每一轮生成都重新内嵌全部源码上下文**（`preprocess.json` 中的 `contexts`）。
+  默认预算 96 KiB ≈ 25–32K token；旧默认 256 KiB ≈ 65–85K token。用
+  `--max-context-kb` 调小即可直接压缩每次输入。
+- **文件按相关性分层选择，不再扫描整个仓库**（复杂工程的关键修复）：
+
+  1. **定义文件**（目标函数体所在文件，即 `symbol(...) {` 出现的文件）——
+     每文件 64 KiB；超大文件用**符号窗口**截取（文件头 4 KiB + 目标函数
+     最后一次出现处附近的窗口），而不是盲取文件头；
+  2. **依赖闭包**：定义文件 `#include "..."`（引号形式）传递解析到源码树内
+     的文件 + 同 basename 头文件（`cJSON.c` → `cJSON.h`）——每文件 32 KiB；
+  3. **构建文件**（CMakeLists/Makefile 等）——每文件 16 KiB；
+  4. **调用方/引用文件**（只是调用或声明了目标函数，如测试）——每文件
+     16 KiB，排在最后，预算有余量才进入。
+
+  其余无关文件**一律不包含**。旧实现先放目标文件与构建文件，然后把整个
+  仓库剩下的文件按字节填充预算，复杂工程里 preprocess.json 因此被测试/
+  其他模块撑爆。
+- **会话不再跨轮累积**：每一轮生成使用独立 session（`<run-id>-gNN`），
+  提示词只出现一次；结构化 `latest_feedback` 携带两轮之间的差异。旧实现所有
+  轮共用同一 session，第 N 轮的输入 ≈ N 份源码上下文 + 历史回复，第 2~3 轮
+  必然超限。
+- **反馈去重**：`GenerationGoal.latest_feedback` 不再随 goal JSON 重复内嵌
+  （它以独立 `## Latest execution feedback` 块传入，每轮只出现一次）。
+- **快速失败守卫**：`max_input_tokens`（模型 Profile 或 `--max-input-tokens`）
+  打开后，驱动在调用端点前按 ~3 字符/token 估算提示词，超过窗口 90% 时抛出
+  可操作的错误（提示 `--max-context-kb`），而不是等端点返回晦涩的超限错误。
+
+```bash
+# 源码很大时降低上下文预算（96 KiB → 64 KiB），每次模型输入约省 10K token
+goaloop run --source repos/<project> --function <symbol> --max-context-kb 64
+
+# 排查：把输入窗口守卫调低，快速触发并确认报错信息
+goaloop run --source repos/<project> --function <symbol> --max-input-tokens 40000
+```
 
 ## CMake 构建目录模式（可选）
 

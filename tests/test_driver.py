@@ -14,13 +14,16 @@ from goaloop.driver import (
     ScriptedGenerationDriver,
     build_format_retry_prompt,
     build_generation_prompt,
+    estimate_tokens,
     extract_json,
 )
 from goaloop.models import (
     SCHEMA_VERSION,
     CapabilityReport,
+    GenerationFeedback,
     GenerationGoal,
     PreprocessResult,
+    SourceContext,
 )
 
 from .helpers import make_artifact_payload
@@ -176,6 +179,43 @@ class TestPrompt:
         assert "bad json" in prompt
         assert "format_retry = 1" in prompt
 
+    def test_latest_feedback_not_duplicated(self) -> None:
+        feedback = GenerationFeedback(
+            category="needs_regeneration",
+            summary="candidate failed to compile: missing header",
+            compile_exit_code=1,
+        )
+        goal = _goal().model_copy(update={"latest_feedback": feedback})
+        prompt = build_generation_prompt(
+            goal=goal,
+            preprocess=_preprocess(),
+            feedback=feedback,
+            expected_loop=2,
+        )
+        # The goal dump must not embed latest_feedback when feedback is passed
+        # separately, so the feedback appears exactly once in the prompt.
+        assert '"latest_feedback"' not in prompt
+        assert prompt.count("candidate failed to compile: missing header") == 1
+        assert "## Latest execution feedback" in prompt
+
+    def test_latest_feedback_in_goal_only_passed_separately(self) -> None:
+        feedback = GenerationFeedback(category="policy", summary="artifacts violate policy")
+        goal = _goal().model_copy(update={"latest_feedback": feedback})
+        prompt = build_generation_prompt(
+            goal=goal,
+            preprocess=_preprocess(),
+            feedback=None,
+            expected_loop=2,
+        )
+        # When no feedback is passed to this loop, the goal dump keeps it out
+        # too: the prompt must not resurrect the previous loop's feedback.
+        assert "artifacts violate policy" not in prompt
+
+    def test_estimate_tokens(self) -> None:
+        assert estimate_tokens("") == 1
+        assert estimate_tokens("x" * 3000) == 1000
+        assert estimate_tokens("abcd") == 1
+
 
 class FakeHarness:
     """Minimal stand-in for the real DeepSeekHarness SDK object."""
@@ -235,6 +275,69 @@ class TestDeepSeekHarnessDriver:
         artifacts = driver.generate_artifacts(goal=_goal(), preprocess=_preprocess(), feedback=None)
         assert artifacts.generation_loop == 1
         assert driver.format_retries == 0
+
+    def test_per_loop_session_isolation(self) -> None:
+        # Each generation loop must run in its own session so the runtime does
+        # not accumulate every previous prompt (each embedding the source).
+        driver = _real_driver("run-live")
+        loop2 = _live_payload()
+        loop2["generation_loop"] = 2
+        harness = FakeHarness([json.dumps(_live_payload()), json.dumps(loop2)])
+        driver._harness = harness
+        driver.generate_artifacts(goal=_goal("run-live"), preprocess=_preprocess("run-live"), feedback=None)
+        driver.generate_artifacts(
+            goal=_goal("run-live", loop=1), preprocess=_preprocess("run-live"), feedback=None
+        )
+        assert [session for _, session in harness.calls] == ["run-live-g01", "run-live-g02"]
+
+    def test_retry_shares_loop_session(self) -> None:
+        first = _live_payload()
+        first["generation_loop"] = 99  # stale loop → ValueError → one retry
+        driver = _real_driver()
+        driver._harness = FakeHarness([json.dumps(first), json.dumps(_live_payload())])
+        artifacts = driver.generate_artifacts(goal=_goal(), preprocess=_preprocess(), feedback=None)
+        assert artifacts.generation_loop == 1
+        sessions = [session for _, session in driver._harness.calls]
+        assert sessions == ["run-live-g01", "run-live-g01"]
+
+    def test_complete_goal_uses_last_generation_session(self) -> None:
+        driver = _real_driver()
+        harness = FakeHarness([json.dumps(_live_payload()), ""])
+        driver._harness = harness
+        driver.generate_artifacts(goal=_goal(), preprocess=_preprocess(), feedback=None)
+        driver.complete_goal(goal=_goal(), summary="harness_verified")
+        assert [session for _, session in harness.calls] == ["run-live-g01", "run-live-g01"]
+
+    def test_input_guard_fails_fast_before_sdk(self) -> None:
+        driver = _real_driver()
+        driver.max_input_tokens = 1000  # far below any real prompt
+        harness = FakeHarness([json.dumps(_live_payload())])
+        driver._harness = harness
+        with pytest.raises(GenerationFailure, match="estimated at .* input tokens"):
+            driver.generate_artifacts(goal=_goal(), preprocess=_preprocess(), feedback=None)
+        assert harness.calls == []  # the SDK must never be called
+
+    def test_input_guard_disabled_without_limit(self) -> None:
+        driver = _real_driver()
+        assert driver.max_input_tokens is None
+        driver._harness = FakeHarness([json.dumps(_live_payload())])
+        artifacts = driver.generate_artifacts(goal=_goal(), preprocess=_preprocess(), feedback=None)
+        assert artifacts.generation_loop == 1
+
+    def test_guard_estimates_real_preprocess(self) -> None:
+        # A 96 KiB source context must stay far under a 128K window: this
+        # guards the regression that made loop 2 overflow the endpoint.
+        driver = _real_driver()
+        driver.max_input_tokens = 131071
+        big = SourceContext(
+            path="src/big.c",
+            sha256="0" * 64,
+            content=("int safe_parse(const uint8_t *d, size_t s) { return 0; }\n" * 4000)[:96 * 1024],
+        )
+        preprocess = _preprocess().model_copy(update={"contexts": [big]})
+        driver._harness = FakeHarness([json.dumps(_live_payload())])
+        artifacts = driver.generate_artifacts(goal=_goal(), preprocess=preprocess, feedback=None)
+        assert artifacts.generation_loop == 1
 
     def test_markdown_fenced_response(self) -> None:
         payload = _live_payload()

@@ -6,3 +6,7 @@ provider = "deepseek-official"
 model = "deepseek-v4-pro"
 cordis = "cordis/goaloop.cordis.yml"
 api_key_env = "DEEPSEEK_API_KEY"
+# 模型输入窗口（token）。goaloop 会在每次生成前估算提示词长度，超过该值
+# 的 90% 时快速失败并给出可操作的报错（而不是等端点返回晦涩的超限错误）。
+# 换成更大窗口的模型时，把它调大或删除即可。
+max_input_tokens = 131071

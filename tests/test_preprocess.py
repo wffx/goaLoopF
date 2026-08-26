@@ -24,6 +24,13 @@ def _request(workspace: Path, **overrides: object) -> FuzzRunRequest:
     return FuzzRunRequest.model_validate(values)
 
 
+def _write(root: Path, relative: str, content: str) -> Path:
+    path = root / relative
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+    return path
+
+
 def test_ready_preprocess(workspace_root: Path, default_profile: object) -> None:
     result = preprocess_request(
         workspace_root,
@@ -136,10 +143,167 @@ def test_context_truncation_budget(workspace_root: Path, default_profile: object
     result = preprocess_request(
         workspace_root,
         "run-8",
+        _request(workspace_root, max_context_kb=16),
+        default_profile,  # type: ignore[arg-type]
+        check_runtime=False,
+    )
+    total = sum(len(ctx.content) for ctx in result.contexts)
+    assert total <= 16 * 1024
+    assert any(ctx.truncated for ctx in result.contexts)
+
+
+def test_context_budget_default_applies(workspace_root: Path, default_profile: object) -> None:
+    (workspace_root / "repos" / "safe" / "src" / "huge.c").write_text(
+        "// safe_parse\n" + "x" * 512 * 1024, encoding="utf-8"
+    )
+    result = preprocess_request(
+        workspace_root,
+        "run-9",
         _request(workspace_root),
         default_profile,  # type: ignore[arg-type]
         check_runtime=False,
     )
     total = sum(len(ctx.content) for ctx in result.contexts)
-    assert total <= 256 * 1024
+    assert total <= 96 * 1024
     assert any(ctx.truncated for ctx in result.contexts)
+
+
+def test_complex_project_skips_unrelated_files(workspace_root: Path, default_profile: object) -> None:
+    # A large project: the target file, its include closure, and many
+    # unrelated files. Only relevant files may enter preprocess.json.
+    src = workspace_root / "repos" / "complex"
+    _write(
+        src,
+        "src/target.c",
+        '#include "dep.h"\nint target_fn(const uint8_t *d, size_t s) { return dep_convert(d[0]); }\n',
+    )
+    _write(src, "src/dep.h", "int dep_convert(unsigned char c);\n")
+    _write(src, "src/dep.c", '#include "dep.h"\nint dep_convert(unsigned char c) { return (int)c; }\n')
+    _write(src, "src/unrelated.c", "int unrelated_big_parser(const char *p) { return p ? 0 : 1; }\n")
+    _write(src, "tests/test_other.c", "int main(void) { return 0; }\n")
+    _write(src, "docs/notes.c", "/* notes */\n")
+    result = preprocess_request(
+        workspace_root,
+        "run-complex",
+        _request(workspace_root, source=str(src), function="target_fn", max_context_kb=64),
+        default_profile,  # type: ignore[arg-type]
+        check_runtime=False,
+    )
+    paths = [ctx.path for ctx in result.contexts]
+    assert "src/target.c" in paths
+    assert "src/dep.h" in paths  # include closure
+    assert "src/dep.c" not in paths  # neither a match nor included
+    assert "src/unrelated.c" not in paths
+    assert "tests/test_other.c" not in paths
+    assert "docs/notes.c" not in paths
+
+
+def test_include_closure_is_transitive(workspace_root: Path, default_profile: object) -> None:
+    src = workspace_root / "repos" / "chain"
+    _write(src, "src/target.c", '#include "a.h"\nint tgt(const uint8_t *d, size_t s) { return a_get(d[0]); }\n')
+    _write(src, "src/a.h", '#include "b.h"\nint a_get(unsigned char c);\n')
+    _write(src, "src/b.h", "int b_helper(int);\n")
+    result = preprocess_request(
+        workspace_root,
+        "run-chain",
+        _request(workspace_root, source=str(src), function="tgt", max_context_kb=32),
+        default_profile,  # type: ignore[arg-type]
+        check_runtime=False,
+    )
+    paths = [ctx.path for ctx in result.contexts]
+    assert "src/a.h" in paths
+    assert "src/b.h" in paths
+
+
+def test_same_basename_header_included_without_symbol(workspace_root: Path, default_profile: object) -> None:
+    src = workspace_root / "repos" / "noinc"
+    _write(
+        src,
+        "src/target.c",
+        "static int helper(const uint8_t *d) { return 0; }\n"
+        "int target_fn(const uint8_t *d, size_t s) { return helper(d); }\n",
+    )
+    _write(src, "src/target.h", "#ifndef TARGET_H\n#define TARGET_H\n#endif\n")
+    result = preprocess_request(
+        workspace_root,
+        "run-noinc",
+        _request(workspace_root, source=str(src), function="target_fn", max_context_kb=32),
+        default_profile,  # type: ignore[arg-type]
+        check_runtime=False,
+    )
+    paths = [ctx.path for ctx in result.contexts]
+    assert "src/target.c" in paths
+    assert "src/target.h" in paths
+
+
+def test_large_target_file_uses_symbol_window(workspace_root: Path, default_profile: object) -> None:
+    # The target symbol sits ~300 KiB into a huge file: the head-only
+    # truncation would miss it entirely; the symbol window must not.
+    src = workspace_root / "repos" / "deep"
+    body = "int deep_fn(const uint8_t *d, size_t s) { return d[s - 1]; }\n"
+    _write(src, "src/deep.c", "/* " + "x" * (300 * 1024) + " */\n" + body)
+    result = preprocess_request(
+        workspace_root,
+        "run-deep",
+        _request(workspace_root, source=str(src), function="deep_fn", max_context_kb=96),
+        default_profile,  # type: ignore[arg-type]
+        check_runtime=False,
+    )
+    ctx = next(item for item in result.contexts if item.path == "src/deep.c")
+    assert ctx.truncated
+    assert "deep_fn" in ctx.content
+    assert len(ctx.content) <= 64 * 1024
+
+
+def test_callers_deprioritized_over_definition(workspace_root: Path, default_profile: object) -> None:
+    # A huge caller (test) file merely invokes the function: it must be
+    # capped at the reference tier and never crowd out the definition.
+    src = workspace_root / "repos" / "callers"
+    _write(
+        src,
+        "src/target.c",
+        "int target_fn(const uint8_t *d, size_t s) { return d[s - 1]; }\n",
+    )
+    _write(
+        src,
+        "tests/huge_caller.c",
+        "int target_fn(const uint8_t *d, size_t s);\n"
+        + "/* pad */\n"
+        + "int call_it(const uint8_t *d) { return target_fn(d, 1); }\n"
+        + "x" * (300 * 1024),
+    )
+    result = preprocess_request(
+        workspace_root,
+        "run-callers",
+        _request(workspace_root, source=str(src), function="target_fn", max_context_kb=64),
+        default_profile,  # type: ignore[arg-type]
+        check_runtime=False,
+    )
+    paths = [ctx.path for ctx in result.contexts]
+    assert paths.index("src/target.c") < paths.index("tests/huge_caller.c")
+    caller = next(item for item in result.contexts if item.path == "tests/huge_caller.c")
+    definition = next(item for item in result.contexts if item.path == "src/target.c")
+    assert caller.truncated
+    assert len(caller.content) <= 16 * 1024
+    assert not definition.truncated
+
+
+def test_angle_bracket_and_missing_includes_ignored(workspace_root: Path, default_profile: object) -> None:
+    src = workspace_root / "repos" / "sysinc"
+    _write(
+        src,
+        "src/target.c",
+        '#include <stdint.h>\n#include "missing.h"\nint target_fn(const uint8_t *d, size_t s) { return d[s - 1]; }\n',
+    )
+    _write(src, "src/other.h", "int other(void);\n")
+    result = preprocess_request(
+        workspace_root,
+        "run-sysinc",
+        _request(workspace_root, source=str(src), function="target_fn", max_context_kb=32),
+        default_profile,  # type: ignore[arg-type]
+        check_runtime=False,
+    )
+    paths = [ctx.path for ctx in result.contexts]
+    assert "src/target.c" in paths
+    # missing.h does not exist and other.h is not referenced: both must stay out.
+    assert "src/other.h" not in paths

@@ -61,6 +61,11 @@ class FuzzRunRequest(Contract):
     model_profile: str = "default"
     max_generation_loops: Annotated[int, Field(ge=1, le=20)] = 5
     fuzz_seconds: Annotated[int, Field(ge=1, le=86_400)] = 600
+    # Source-context budget embedded in every generation prompt, in KiB.
+    # This is the dominant contributor to the model's input-token usage: the
+    # default (96 KiB ≈ 25-32K tokens) keeps one prompt well inside a 128K
+    # window together with scaffolding, feedback and the model's own response.
+    max_context_kb: Annotated[int, Field(ge=8, le=1024)] = 96
     # Optional directory of seed inputs copied into the run's corpus before
     # fuzzing, so successive runs can reuse a previous run's corpus.
     seed_corpus: Path | None = None
@@ -169,6 +174,10 @@ class ModelProfile(Contract):
     provider: str = "deepseek-official"
     model: str = "deepseek-v4-pro"
     max_tokens: int | None = Field(default=None, ge=1)
+    # The model's context window (input limit in tokens). When set, the driver
+    # estimates each generation prompt and fails fast with an actionable error
+    # before hitting the endpoint's own "input exceeds limit" rejection.
+    max_input_tokens: int | None = Field(default=None, ge=1)
     cordis: Path | None = None
     # Optional endpoint override for the deepseek adapter (OpenAI-compatible
     # gateways should be configured in the pi-ai Cordis providers instead).
