@@ -34,10 +34,12 @@ def _workspace_root(workspace: Path | None) -> Path:
     return Path(env).resolve() if env else Path.cwd().resolve()
 
 
-def _find_run_dir(workspace_root: Path, run_id: str) -> Path:
-    matches = sorted((workspace_root / "work").glob(f"*/runs/{run_id}"))
+def _find_run_dir(workspace_root: Path, run_id: str, output_root: Path | None = None) -> Path:
+    base = (output_root or workspace_root / "work").resolve()
+    matches = sorted(base.glob(f"*/runs/{run_id}"))
     if not matches:
-        raise typer.BadParameter(f"run {run_id!r} was not found under {workspace_root / 'work'}")
+        hint = "" if output_root is not None else " (if the run used --output, pass the same --output here)"
+        raise typer.BadParameter(f"run {run_id!r} was not found under {base}{hint}")
     return matches[0]
 
 
@@ -87,6 +89,11 @@ def run(
         "--api-key",
         help="override model credential (injected into the profile's api_key_env)",
     ),
+    output: Path | None = typer.Option(
+        None,
+        "--output",
+        help="root directory for this run's products (default: <workspace>/work)",
+    ),
     verbose: bool = typer.Option(False, "--verbose", help="print live progress events"),
     workspace: Path | None = typer.Option(None, "--workspace", help="workspace root (default: cwd)"),
 ) -> None:
@@ -128,6 +135,7 @@ def run(
         backend=backend,
         model_profile=model,
         run_id=run_id,
+        output_root=output,
         on_event=_verbose_event_printer(verbose),
     )
     typer.echo(f"[goaloop] run {run_id} started (source={source}, function={function})")
@@ -135,7 +143,7 @@ def run(
         state = controller.run()
     finally:
         controller.close()
-    _echo_state(state, run_dir=ArtifactStore(ws, state.project_name, run_id).run_dir)
+    _echo_state(state, run_dir=ArtifactStore(ws, state.project_name, run_id, output_root=output).run_dir)
 
 
 @app.command()
@@ -150,12 +158,17 @@ def resume(
         min=1024,
         help="fail fast when a prompt is estimated to exceed this many input tokens (default: model profile)",
     ),
+    output: Path | None = typer.Option(
+        None,
+        "--output",
+        help="root directory where the run's products live (default: <workspace>/work)",
+    ),
     verbose: bool = typer.Option(False, "--verbose", help="print live progress events"),
     workspace: Path | None = typer.Option(None, "--workspace"),
 ) -> None:
     """Resume a run from its persisted checkpoint."""
     ws = _workspace_root(workspace)
-    run_dir = _find_run_dir(ws, run_id)
+    run_dir = _find_run_dir(ws, run_id, output)
     state = _load_run_state(run_dir)
     validation = load_validation_profile(state.request.profile, ws)
     model = _apply_model_overrides(load_model_profile(state.request.model_profile, ws), model_name, base_url, api_key)
@@ -181,6 +194,7 @@ def resume(
         model_profile=model,
         run_id=run_id,
         resume=True,
+        output_root=output,
         on_event=_verbose_event_printer(verbose),
     )
     typer.echo(f"[goaloop] resuming {run_id} from phase {state.phase.value}")
@@ -195,26 +209,37 @@ def resume(
 def status(
     run_id: str = typer.Option(..., "--run-id", help="run id to inspect"),
     json_output: bool = typer.Option(False, "--json", help="dump RunState as JSON"),
+    output: Path | None = typer.Option(
+        None,
+        "--output",
+        help="root directory where the run's products live (default: <workspace>/work)",
+    ),
     workspace: Path | None = typer.Option(None, "--workspace"),
 ) -> None:
     """Show the persisted state of one run."""
     ws = _workspace_root(workspace)
-    state = _load_run_state(_find_run_dir(ws, run_id))
+    run_dir = _find_run_dir(ws, run_id, output)
+    state = _load_run_state(run_dir)
     if json_output:
         typer.echo(json.dumps(state.model_dump(mode="json"), ensure_ascii=False, indent=2))
         return
-    _echo_state(state, run_dir=_find_run_dir(ws, run_id))
+    _echo_state(state, run_dir=run_dir)
 
 
 @app.command()
 def report(
     run_id: str = typer.Option(..., "--run-id", help="run id to report"),
     fmt: str = typer.Option("markdown", "--format", help="markdown | json"),
+    output: Path | None = typer.Option(
+        None,
+        "--output",
+        help="root directory where the run's products live (default: <workspace>/work)",
+    ),
     workspace: Path | None = typer.Option(None, "--workspace"),
 ) -> None:
     """Print the final report of one run."""
     ws = _workspace_root(workspace)
-    run_dir = _find_run_dir(ws, run_id)
+    run_dir = _find_run_dir(ws, run_id, output)
     _load_run_state(run_dir)  # validate the run exists and is readable
     if fmt == "json":
         path = run_dir / VALIDATION_FILENAME
@@ -283,6 +308,11 @@ def doctor(
 def evaluate(
     suite: Path = typer.Argument(..., help="manifest.json with entries to run"),
     repetitions: int = typer.Option(3, "--repetitions", min=1, max=20),
+    output: Path | None = typer.Option(
+        None,
+        "--output",
+        help="root directory for run products and the results file (default: <workspace>/work)",
+    ),
     workspace: Path | None = typer.Option(None, "--workspace"),
 ) -> None:
     """Run a suite of entries several times and summarize outcomes."""
@@ -343,12 +373,16 @@ def evaluate(
                 backend=backend,
                 model_profile=model,
                 run_id=run_id,
+                output_root=output,
             )
             try:
                 state = controller.run()
             finally:
                 controller.close()
-            metrics_path = ArtifactStore(ws, state.project_name, run_id).run_dir / "research-metrics.json"
+            metrics_path = (
+                ArtifactStore(ws, state.project_name, run_id, output_root=output).run_dir
+                / "research-metrics.json"
+            )
             metrics = json.loads(metrics_path.read_text(encoding="utf-8")) if metrics_path.is_file() else {}
             results.append(
                 {
@@ -368,15 +402,20 @@ def evaluate(
         key = item["function"]
         bucket = summary.setdefault(key, {})
         bucket[item["status"] or "none"] = bucket.get(item["status"] or "none", 0) + 1
-    output = {
+    payload = {
         "suite": suite.as_posix(),
         "repetitions": repetitions,
         "duration_seconds": round(time.monotonic() - started, 3),
         "results": results,
         "summary": summary,
     }
-    out_path = ws / "evaluate-results.json"
-    out_path.write_text(json.dumps(output, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    if output is not None:
+        out_root = output.resolve()
+        out_root.mkdir(parents=True, exist_ok=True)
+        out_path = out_root / "evaluate-results.json"
+    else:
+        out_path = ws / "evaluate-results.json"
+    out_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     for function, counts in summary.items():
         typer.echo(f"[evaluate] {function}: {counts}")
     typer.echo(f"[evaluate] results written to {out_path}")

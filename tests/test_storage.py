@@ -32,6 +32,18 @@ def test_initialize_creates_dirs(workspace_root: Path) -> None:
     assert store.private_session_dir.is_dir()
 
 
+def test_custom_output_root_relocates_run_dir(workspace_root: Path, tmp_path: Path) -> None:
+    out = tmp_path / "artifacts"
+    store = ArtifactStore(workspace_root, "safe", "run-out-1", output_root=out)
+    store.initialize()
+    assert store.run_dir == out.resolve() / "safe" / "runs" / "run-out-1"
+    assert store.run_dir.is_dir()
+    # The private session record stays workspace-scoped regardless of output.
+    assert store.private_session_dir == workspace_root / ".private-sessions" / "run-out-1"
+    # Default output root is <workspace>/work.
+    assert ArtifactStore(workspace_root, "safe", "x").run_dir == workspace_root / "work" / "safe" / "runs" / "x"
+
+
 def test_events_are_append_only(workspace_root: Path) -> None:
     store = _store(workspace_root)
     store.append_event(RunEvent(sequence=1, phase=Phase.PREPROCESS, kind="a"))

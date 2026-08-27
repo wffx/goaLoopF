@@ -56,6 +56,7 @@ class RunController(GenerationMixin, ReportMixin):
         model_profile: ModelProfile | None = None,
         run_id: str | None = None,
         resume: bool = False,
+        output_root: Path | None = None,
         on_event: Callable[[RunEvent], None] | None = None,
     ) -> None:
         self.workspace_root = workspace_root.resolve()
@@ -65,6 +66,8 @@ class RunController(GenerationMixin, ReportMixin):
         self.backend = backend
         self.model_profile = model_profile
         self.resume = resume
+        # Output root for run products; defaults to <workspace>/work.
+        self.output_root = (output_root or self.workspace_root / "work").resolve()
         self.on_event = on_event
 
         self.state: RunState | None = None
@@ -138,6 +141,7 @@ class RunController(GenerationMixin, ReportMixin):
             request=self.request,
             phase=Phase.PREPROCESS,
             goal=goal,
+            output_root=self.output_root,
         )
         self.goal = goal
         # Nothing is persisted until preprocess resolves the project name, so a
@@ -147,12 +151,12 @@ class RunController(GenerationMixin, ReportMixin):
         if self._resumed_run_id is None:
             raise ValueError("resume requires --run-id")
         run_id = self._resumed_run_id
-        matches = sorted((self.workspace_root / "work").glob(f"*/runs/{run_id}"))
+        matches = sorted(self.output_root.glob(f"*/runs/{run_id}"))
         if not matches:
-            raise FileNotFoundError(f"run {run_id!r} was not found under work/")
+            raise FileNotFoundError(f"run {run_id!r} was not found under {self.output_root}")
         run_dir = matches[0]
         project_name = run_dir.parent.parent.name
-        self.store = ArtifactStore(self.workspace_root, project_name, run_id)
+        self.store = ArtifactStore(self.workspace_root, project_name, run_id, output_root=self.output_root)
         self.state = self.store.load_state()
         self.goal = self.state.goal
         preprocess_path = run_dir / PREPROCESS_FILENAME
@@ -272,7 +276,12 @@ class RunController(GenerationMixin, ReportMixin):
         )
         self.preprocess = preprocess
         self.state.project_name = preprocess.project_name
-        self.store = ArtifactStore(self.workspace_root, preprocess.project_name, self.state.run_id)
+        self.store = ArtifactStore(
+            self.workspace_root,
+            preprocess.project_name,
+            self.state.run_id,
+            output_root=self.output_root,
+        )
         self.store.initialize()
         self._seed_corpus()
         self._persist_preprocess()

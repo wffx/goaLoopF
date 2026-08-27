@@ -540,6 +540,10 @@ class RunState(Contract):
     preprocess_result_path: str | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    # Output root holding this run's artifacts (resolved absolute path).
+    # None means the default <workspace>/work layout; persisted so reports and
+    # audits can show where the run's products actually live.
+    output_root: Path | None = None
 
 
 def _validate_relative_path(value: str) -> None:

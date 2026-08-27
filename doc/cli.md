@@ -35,6 +35,7 @@ goaloop run --source repos/<project> --function <symbol>
 | `--model-name` | Profile 值 | 覆盖模型 ID（如 `gpt-4o`、`deepseek-v4-pro`） |
 | `--base-url` | Profile 值 | 覆盖模型端点（deepseek 适配器生效） |
 | `--api-key` | 环境变量 | 覆盖模型凭据（注入 Profile 的 `api_key_env`，仅本次进程生效，不落盘） |
+| `--output` | `<workspace>/work` | 产物根目录（run 目录 = `<output>/<project>/runs/<run-id>/`）。适合把产物放到外部磁盘/独立目录；`resume`/`status`/`report` 需传相同的 `--output` 定位 run |
 | `--verbose` | `false` | 实时打印控制器进度事件（preprocess/compile/fuzz/decided 等） |
 | `--workspace` | cwd | 工作区根目录 |
 
@@ -43,15 +44,16 @@ goaloop run --source repos/<project> --function <symbol>
 ### `goaloop resume` — 从断点续跑
 
 ```bash
-goaloop resume --run-id <id> [--verbose] [--workspace <path>]
+goaloop resume --run-id <id> [--output <dir>] [--verbose] [--workspace <path>]
 ```
 
 从 `state.json`/`events.jsonl` 恢复状态，继续执行。已完成的证据不重复覆盖。
+若该 run 使用了 `--output`，这里必须传相同的 `--output`。
 
 ### `goaloop status` — 查看 run 状态
 
 ```bash
-goaloop status --run-id <id> [--json] [--workspace <path>]
+goaloop status --run-id <id> [--output <dir>] [--json] [--workspace <path>]
 ```
 
 不带 `--json` 时打印摘要（run-id、project、phase、loop、status、产物路径）；带 `--json` 时打印完整 `RunState` JSON。
@@ -59,7 +61,7 @@ goaloop status --run-id <id> [--json] [--workspace <path>]
 ### `goaloop report` — 查看报告
 
 ```bash
-goaloop report --run-id <id> [--format markdown|json] [--workspace <path>]
+goaloop report --run-id <id> [--output <dir>] [--format markdown|json] [--workspace <path>]
 ```
 
 `--format` 默认 `markdown`（打印 `report.md`）；`json` 打印 `validation.json`。
@@ -75,7 +77,7 @@ goaloop doctor [--profile default] [--model-profile default] [--workspace <path>
 ### `goaloop evaluate` — 批量研究
 
 ```bash
-goaloop evaluate <suite.json> [--repetitions 3] [--workspace <path>]
+goaloop evaluate <suite.json> [--repetitions 3] [--output <dir>] [--workspace <path>]
 ```
 
 suite.json 格式：

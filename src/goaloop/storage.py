@@ -17,9 +17,18 @@ from .models import GeneratedArtifactSet, RunEvent, RunState
 class ArtifactStore:
     """Owns writes below one run directory and never writes into repos/."""
 
-    def __init__(self, workspace_root: Path, project_name: str, run_id: str) -> None:
+    def __init__(
+        self,
+        workspace_root: Path,
+        project_name: str,
+        run_id: str,
+        output_root: Path | None = None,
+    ) -> None:
         self.workspace_root = workspace_root.resolve()
-        self.run_dir = self.workspace_root / "work" / project_name / "runs" / run_id
+        # Output root holding run products: default <workspace>/work, or the
+        # user-provided --output directory (e.g. an external disk).
+        self.output_root = (output_root or self.workspace_root / "work").resolve()
+        self.run_dir = self.output_root / project_name / "runs" / run_id
         self.iterations_dir = self.run_dir / "iterations"
         self.logs_dir = self.run_dir / "logs"
         self.coverage_dir = self.run_dir / "coverage"

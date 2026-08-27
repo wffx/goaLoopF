@@ -22,8 +22,9 @@ def _make_run(
     project: str = "safe",
     terminal: TerminalStatus | None = None,
     with_report: bool = False,
+    output_root: Path | None = None,
 ) -> Path:
-    store = ArtifactStore(workspace_root, project, run_id)
+    store = ArtifactStore(workspace_root, project, run_id, output_root=output_root)
     store.initialize()
     state = RunState(
         run_id=run_id,
@@ -169,6 +170,55 @@ class TestResume:
         result = runner.invoke(app, ["resume", "--run-id", "no-such-run", "--workspace", str(workspace_root)])
         assert result.exit_code != 0
         assert "not found" in result.output
+
+
+class TestOutputDir:
+    def test_run_with_output_relocates_products(self, workspace_root: Path, tmp_path: Path) -> None:
+        out = tmp_path / "out"
+        result = runner.invoke(
+            app,
+            [
+                "run",
+                "--source",
+                "repos/does-not-exist",
+                "--function",
+                "f",
+                "--workspace",
+                str(workspace_root),
+                "--output",
+                str(out),
+                "--max-generation-loops",
+                "1",
+                "--fuzz-seconds",
+                "1",
+            ],
+        )
+        assert result.exit_code == 0
+        assert "needs_input" in result.output
+        runs = list((out / "does-not-exist" / "runs").glob("*"))
+        assert len(runs) == 1
+        # the default work/ layout must not receive this run
+        assert not list((workspace_root / "work" / "does-not-exist" / "runs").glob("*"))
+
+    def test_status_requires_same_output(self, workspace_root: Path, tmp_path: Path) -> None:
+        out = tmp_path / "out"
+        run_id = "run-out-cli"
+        _make_run(workspace_root, run_id, terminal=TerminalStatus.HARNESS_VERIFIED, output_root=out)
+        # not found without --output
+        missing = runner.invoke(app, ["status", "--run-id", run_id, "--workspace", str(workspace_root)])
+        assert missing.exit_code != 0
+        assert "not found" in missing.output
+        # found with --output
+        found = runner.invoke(
+            app, ["status", "--run-id", run_id, "--output", str(out), "--workspace", str(workspace_root)]
+        )
+        assert found.exit_code == 0
+        assert run_id in found.output
+
+    def test_missing_run_hints_at_output(self, workspace_root: Path) -> None:
+        result = runner.invoke(app, ["status", "--run-id", "no-such-run", "--workspace", str(workspace_root)])
+        assert result.exit_code != 0
+        assert "--output" in result.output
 
 
 class TestEvaluate:
