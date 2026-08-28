@@ -8,8 +8,8 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
-from goaloop.cli import app
-from goaloop.models import FuzzRunRequest, GenerationGoal, Phase, RunState, TerminalStatus
+from goaloop.cli import _event_printer, app
+from goaloop.models import FuzzRunRequest, GenerationGoal, Phase, RunEvent, RunState, TerminalStatus
 from goaloop.storage import ArtifactStore
 
 runner = CliRunner()
@@ -148,6 +148,8 @@ class TestRun:
         )
         assert result.exit_code == 0
         assert "needs_input" in result.output
+        assert "phase=preprocess step=started" in result.output
+        assert "phase=preprocess step=completed" in result.output
 
     def test_missing_source_scope_is_needs_input(self, workspace_root: Path) -> None:
         result = runner.invoke(
@@ -190,6 +192,41 @@ class TestRun:
             ],
         )
         assert result.exit_code != 0
+
+
+class TestProgressOutput:
+    def test_default_printer_shows_phase_and_step(self, capsys) -> None:
+        printer = _event_printer(False)
+        printer(
+            RunEvent(
+                sequence=1,
+                phase=Phase.HARNESS_GENERATION,
+                kind="generation:model_started",
+                payload={"loop": 2, "max_loops": 5},
+            )
+        )
+
+        output = capsys.readouterr().out
+        assert "phase=harness_generation" in output
+        assert "step=model_generation_started" in output
+        assert "loop=2" in output
+        assert "details=" not in output
+
+    def test_verbose_printer_includes_payload(self, capsys) -> None:
+        printer = _event_printer(True)
+        printer(
+            RunEvent(
+                sequence=1,
+                phase=Phase.HARNESS_EXECUTION,
+                kind="execution:fuzz_started",
+                payload={"loop": 1, "seconds": 600},
+            )
+        )
+
+        output = capsys.readouterr().out
+        assert "phase=harness_execution" in output
+        assert "step=fuzz_started" in output
+        assert 'details={"loop": 1, "seconds": 600}' in output
 
 
 class TestResume:

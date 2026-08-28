@@ -57,6 +57,10 @@ class GenerationMixin:
             )
             return
 
+        self._event(
+            "generation:model_started",
+            {"loop": loop, "max_loops": self.request.max_generation_loops},
+        )
         try:
             artifacts = self.driver.generate_artifacts(
                 goal=self.goal,
@@ -72,6 +76,8 @@ class GenerationMixin:
             self._terminate(TerminalStatus.FAILED, f"model output stayed invalid: {exc}")
             return
 
+        self._event("generation:model_completed", {"loop": loop, "files": len(artifacts.files)})
+        self._event("generation:validation_started", {"loop": loop})
         try:
             validate_generated_artifacts(artifacts, self.profile)
         except ArtifactPolicyError as exc:
@@ -90,13 +96,20 @@ class GenerationMixin:
                 )
             return
 
+        self._event("generation:validation_completed", {"loop": loop})
         self._execute_candidate(artifacts, loop)
 
     def _execute_candidate(self: ControllerState, artifacts: GeneratedArtifactSet, loop: int) -> None:
         assert (
             self.state is not None and self.store is not None and self.preprocess is not None and self.goal is not None
         )
+        self._event(
+            "phase:enter",
+            {"phase": Phase.HARNESS_EXECUTION.value},
+            phase=Phase.HARNESS_EXECUTION,
+        )
         candidate_dir = self.store.materialize_candidate(artifacts)
+        self._event("execution:materialized", {"loop": loop}, phase=Phase.HARNESS_EXECUTION)
         binary_name = artifacts.endpoint_plan.build.binary_name
         self._loop_hashes[str(loop)] = self._candidate_hashes(candidate_dir.parent)
         context = RunContext(
@@ -122,10 +135,12 @@ class GenerationMixin:
             build_library=build_library,
             build_include_dirs=build_include_dirs,
         )
+        self._event("execution:compile_started", {"loop": loop}, phase=Phase.HARNESS_EXECUTION)
         compile_result = self.backend.execute(compile_request)
         self._event(
             "execution:compile",
             {"loop": loop, "exit_code": compile_result.exit_code, "timed_out": compile_result.timed_out},
+            phase=Phase.HARNESS_EXECUTION,
         )
         if loop == 1:
             self._first_compile_success = compile_result.exit_code == 0
@@ -164,6 +179,7 @@ class GenerationMixin:
                 "target_function_hit": execution.coverage.target_function_hit,
                 "target_line_coverage": execution.coverage.target_line_coverage,
             },
+            phase=Phase.HARNESS_EXECUTION,
         )
         if decision.feedback is not None and decision.feedback.log_excerpt:
             decision.feedback = decision.feedback.model_copy(
@@ -185,6 +201,12 @@ class GenerationMixin:
                 self._terminate(
                     TerminalStatus.FAILED,
                     f"generation loop budget exhausted after {loop} loop(s): {decision.reason}",
+                )
+            else:
+                self._event(
+                    "phase:enter",
+                    {"phase": Phase.HARNESS_GENERATION.value},
+                    phase=Phase.HARNESS_GENERATION,
                 )
             return
         if decision.disposition is ExecutionDisposition.ENVIRONMENT_ERROR:
@@ -221,10 +243,16 @@ class GenerationMixin:
             flags=self.profile.build.flags,
             timeout_seconds=timeout,
         )
+        self._event(
+            "execution:cmake_configure_started",
+            {"loop": loop, "build_dir": str(build_dir)},
+            phase=Phase.HARNESS_EXECUTION,
+        )
         configure_result = self.backend.execute(configure)
         self._event(
             "execution:cmake_configure",
             {"loop": loop, "exit_code": configure_result.exit_code, "build_dir": str(build_dir)},
+            phase=Phase.HARNESS_EXECUTION,
         )
         if configure_result.exit_code != 0:
             self._terminate(TerminalStatus.BLOCKED, f"cmake configure failed: {configure_result.stderr[-2000:]}")
@@ -236,10 +264,12 @@ class GenerationMixin:
             target=self.profile.build.target,
             timeout_seconds=timeout,
         )
+        self._event("execution:cmake_build_started", {"loop": loop}, phase=Phase.HARNESS_EXECUTION)
         build_result = self.backend.execute(build_request)
         self._event(
             "execution:cmake_build",
             {"loop": loop, "exit_code": build_result.exit_code},
+            phase=Phase.HARNESS_EXECUTION,
         )
         if build_result.exit_code != 0:
             self._terminate(TerminalStatus.BLOCKED, f"cmake build failed: {build_result.stderr[-2000:]}")
@@ -253,7 +283,11 @@ class GenerationMixin:
             )
             return None, None
         include_dirs = [build_dir / item for item in self.profile.build.include_dirs]
-        self._event("execution:cmake_library", {"loop": loop, "library": str(library)})
+        self._event(
+            "execution:cmake_library",
+            {"loop": loop, "library": str(library)},
+            phase=Phase.HARNESS_EXECUTION,
+        )
         return library, include_dirs
 
     def _find_build_library(self: ControllerState, build_root: Path) -> Path | None:
@@ -283,6 +317,11 @@ class GenerationMixin:
         profraw = self.store.coverage_dir / f"loop-{loop:02d}.profraw"
         fuzz_env = {"LLVM_PROFILE_FILE": str(profraw)}
         fuzz_request = fuzz_request.model_copy(update={"env": fuzz_env})
+        self._event(
+            "execution:fuzz_started",
+            {"loop": loop, "seconds": self.request.fuzz_seconds},
+            phase=Phase.HARNESS_EXECUTION,
+        )
         fuzz_result = self.backend.execute(fuzz_request)
         self._event(
             "execution:fuzz",
@@ -292,6 +331,7 @@ class GenerationMixin:
                 "timed_out": fuzz_result.timed_out,
                 "duration": fuzz_result.duration_seconds,
             },
+            phase=Phase.HARNESS_EXECUTION,
         )
         if fuzz_result.timed_out:
             self._time_to_bug = fuzz_result.duration_seconds
@@ -299,6 +339,7 @@ class GenerationMixin:
         metrics = parse_libfuzzer_metrics(f"{fuzz_result.stdout}\n{fuzz_result.stderr}")
         binary = candidate_dir / binary_name
         target_metrics = None
+        self._event("execution:coverage_started", {"loop": loop}, phase=Phase.HARNESS_EXECUTION)
         try:
             target_metrics = coverage_module.measure_coverage(
                 backend=self.backend,
@@ -313,9 +354,17 @@ class GenerationMixin:
                 timeout_seconds=self.profile.resources.timeout_seconds,
             )
         except coverage_module.CoverageMeasurementError as exc:
-            self._event("execution:coverage", {"loop": loop, "ok": False, "detail": str(exc)})
+            self._event(
+                "execution:coverage",
+                {"loop": loop, "ok": False, "detail": str(exc)},
+                phase=Phase.HARNESS_EXECUTION,
+            )
         else:
-            self._event("execution:coverage", {"loop": loop, "ok": True})
+            self._event(
+                "execution:coverage",
+                {"loop": loop, "ok": True},
+                phase=Phase.HARNESS_EXECUTION,
+            )
         target_update: dict[str, object] = {}
         if target_metrics is not None:
             # Field-level merge: target_metrics only owns the target attribution

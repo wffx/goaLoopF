@@ -37,10 +37,11 @@ goaloop run --repo repos/<project> --source <dir-or-file> --function <symbol>
 | `--base-url` | Profile 值 | 覆盖模型端点（deepseek 适配器生效） |
 | `--api-key` | 环境变量 | 覆盖模型凭据（注入 Profile 的 `api_key_env`，仅本次进程生效，不落盘） |
 | `--output` | `<workspace>/work` | 产物根目录（run 目录 = `<output>/<project>/runs/<run-id>/`）。适合把产物放到外部磁盘/独立目录；`resume`/`status`/`report` 需传相同的 `--output` 定位 run |
-| `--verbose` | `false` | 实时打印控制器进度事件（preprocess/compile/fuzz/decided 等） |
+| `--verbose` | `false` | 默认已实时打印 phase/step 进度；启用后额外输出每个事件的 payload 详情 |
 | `--workspace` | cwd | 工作区根目录 |
 
-输出：run-id、终态、产物路径。
+运行期间持续输出当前 `phase`、`step` 和 loop；模型调用、编译、fuzz、覆盖、crash
+分析与报告写入等耗时步骤都会在开始和完成时分别输出。结束时输出 run-id、终态和产物路径。
 
 ### `goaloop resume` — 从断点续跑
 

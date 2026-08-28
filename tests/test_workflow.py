@@ -228,6 +228,18 @@ class TestRegeneration:
         assert state.terminal_status is TerminalStatus.FAILED
         assert state.generation_loop == 2
         assert "budget" in _report_text(workspace_root, "run-exhaust-1")
+        events_path = ArtifactStore(workspace_root, "safe", "run-exhaust-1").run_dir / "events.jsonl"
+        events = [json.loads(line) for line in events_path.read_text(encoding="utf-8").splitlines()]
+        assert any(event["kind"] == "generation:model_started" for event in events)
+        assert any(event["kind"] == "execution:compile_started" for event in events)
+        assert any(
+            event["kind"] == "phase:enter" and event["payload"]["phase"] == "harness_execution"
+            for event in events
+        )
+        assert sum(
+            event["kind"] == "phase:enter" and event["payload"]["phase"] == "harness_generation"
+            for event in events
+        ) >= 2
         # validation.json must keep the specific reason, not the bare status
         validation = json.loads(
             (ArtifactStore(workspace_root, "safe", "run-exhaust-1").run_dir / "validation.json").read_text()

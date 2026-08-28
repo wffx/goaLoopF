@@ -77,6 +77,7 @@ class ReportMixin:
         fuzz_output = ""
         if self.last_execution.fuzz_result is not None:
             fuzz_output = f"{self.last_execution.fuzz_result.stdout}\n{self.last_execution.fuzz_result.stderr}"
+        self._event("crash:analysis_started", {"loop": loop, "artifacts": len(crash_files)})
         self.last_crash_analysis = analyze_crash(
             source_root=self.preprocess.source_root,
             candidate_dir=candidate_dir or self.store.run_dir,
@@ -134,6 +135,7 @@ class ReportMixin:
             # status word.
             reason = self._terminal_reason() or reason
 
+        self._event("report:write_started", {"status": status.value})
         report_path = write_markdown_report(
             run_dir=self.store.run_dir,
             state=self.state,

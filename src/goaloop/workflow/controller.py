@@ -212,18 +212,30 @@ class RunController(GenerationMixin, ReportMixin):
         if self.goal is not None:
             self.store.write_json(self.store.run_dir / GOAL_FILENAME, self.goal)
 
-    def _event(self, kind: str, payload: dict[str, Any]) -> None:
+    def _event(self, kind: str, payload: dict[str, Any], *, phase: Phase | None = None) -> None:
         if self.state is None or self.store is None:
             return
         event = RunEvent(
             sequence=self.store.next_event_sequence(),
-            phase=self.state.phase,
+            phase=phase or self.state.phase,
             kind=kind,
             payload=payload,
         )
         self.store.append_event(event)
         if self.on_event is not None:
             self.on_event(event)
+
+    def _progress(self, kind: str, payload: dict[str, Any]) -> None:
+        if self.state is None or self.on_event is None:
+            return
+        self.on_event(
+            RunEvent(
+                sequence=0,
+                phase=self.state.phase,
+                kind=kind,
+                payload=payload,
+            )
+        )
 
     def _enter_phase(self, phase: Phase) -> None:
         assert self.state is not None
@@ -266,6 +278,10 @@ class RunController(GenerationMixin, ReportMixin):
     def _preprocess_step(self) -> None:
         assert self.state is not None
         started = time.monotonic()
+        self._progress(
+            "preprocess:started",
+            {"repo": str(self.request.repo or self.request.source), "source": str(self.request.source)},
+        )
         self._ensure_model_credential()
         preprocess = preprocess_request(
             self.workspace_root,
@@ -286,15 +302,17 @@ class RunController(GenerationMixin, ReportMixin):
         self.store.initialize()
         self._seed_corpus()
         self._persist_preprocess()
+        duration = round(time.monotonic() - started, 3)
         self._event(
             "preprocess:done",
             {
                 "ready": preprocess.ready,
                 "status": preprocess.terminal_status.value if preprocess.terminal_status else None,
                 "reason": preprocess.reason,
+                "duration": duration,
             },
         )
-        self._phase_durations["preprocess"] = round(time.monotonic() - started, 3)
+        self._phase_durations["preprocess"] = duration
         self._save_checkpoint()
         if not preprocess.ready:
             status = preprocess.terminal_status or TerminalStatus.FAILED

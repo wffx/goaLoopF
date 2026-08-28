@@ -95,7 +95,7 @@ def run(
         "--output",
         help="root directory for this run's products (default: <workspace>/work)",
     ),
-    verbose: bool = typer.Option(False, "--verbose", help="print live progress events"),
+    verbose: bool = typer.Option(False, "--verbose", help="include event payloads in live progress output"),
     workspace: Path | None = typer.Option(None, "--workspace", help="workspace root (default: cwd)"),
 ) -> None:
     """Run the full four-phase workflow for one target function."""
@@ -138,7 +138,7 @@ def run(
         model_profile=model,
         run_id=run_id,
         output_root=output,
-        on_event=_verbose_event_printer(verbose),
+        on_event=_event_printer(verbose),
     )
     typer.echo(f"[goaloop] run {run_id} started (repo={repo}, source={source}, function={function})")
     try:
@@ -165,7 +165,7 @@ def resume(
         "--output",
         help="root directory where the run's products live (default: <workspace>/work)",
     ),
-    verbose: bool = typer.Option(False, "--verbose", help="print live progress events"),
+    verbose: bool = typer.Option(False, "--verbose", help="include event payloads in live progress output"),
     workspace: Path | None = typer.Option(None, "--workspace"),
 ) -> None:
     """Resume a run from its persisted checkpoint."""
@@ -197,7 +197,7 @@ def resume(
         run_id=run_id,
         resume=True,
         output_root=output,
-        on_event=_verbose_event_printer(verbose),
+        on_event=_event_printer(verbose),
     )
     typer.echo(f"[goaloop] resuming {run_id} from phase {state.phase.value}")
     try:
@@ -377,6 +377,7 @@ def evaluate(
                 model_profile=model,
                 run_id=run_id,
                 output_root=output,
+                on_event=_event_printer(False),
             )
             try:
                 state = controller.run()
@@ -531,44 +532,67 @@ def _provider_model_env(provider: str) -> str:
     return provider.upper().replace("-", "_") + "_MODEL"
 
 
-def _verbose_event_printer(enabled: bool) -> Callable[[RunEvent], None] | None:
-    """Return a callback that prints a human-readable line per controller event."""
+def _event_printer(verbose: bool) -> Callable[[RunEvent], None]:
+    """Return a callback that prints phase and step progress for controller events."""
 
     def _print(event: RunEvent) -> None:
         payload = event.payload
-        line: str
-        if event.kind == "preprocess:done":
-            line = f"preprocess ready={payload.get('ready')}"
-        elif event.kind == "execution:compile":
-            line = f"compile loop={payload.get('loop')} exit={payload.get('exit_code')}"
-        elif event.kind == "execution:fuzz":
-            line = (
-                f"fuzz loop={payload.get('loop')} exit={payload.get('exit_code')} duration={payload.get('duration')}s"
-            )
-        elif event.kind == "execution:coverage":
-            line = f"coverage loop={payload.get('loop')} ok={payload.get('ok')}"
-        elif event.kind == "execution:decided":
-            line = (
-                f"decided loop={payload.get('loop')} disposition={payload.get('disposition')} "
-                f"decision={payload.get('decision')} target_hit={payload.get('target_function_hit')} "
-                f"target_cov={payload.get('target_line_coverage')}"
-            )
-        elif event.kind == "generation:policy_rejected":
-            line = f"policy_rejected loop={payload.get('loop')}: {payload.get('reason')}"
-        elif event.kind == "crash:analysis":
-            line = (
-                f"crash_analysis ownership={payload.get('ownership')} "
-                f"reproductions={payload.get('reproductions')} sanitizer={payload.get('sanitizer')}"
-            )
-        elif event.kind == "run:terminal":
-            line = f"terminal status={payload.get('status')}: {payload.get('reason')}"
-        elif event.kind == "corpus:seed":
-            line = f"corpus_seed ok={payload.get('ok')} copied={payload.get('copied')}"
-        else:
-            line = f"{event.kind} {json.dumps(payload, ensure_ascii=False)[:200]}"
-        typer.echo(f"[goaloop] {line}")
+        line = _progress_line(event.kind, payload)
+        if line is None and not verbose:
+            return
+        line = line or f"step={event.kind}"
+        if verbose and payload:
+            line += f" details={json.dumps(payload, ensure_ascii=False, default=str)[:500]}"
+        typer.echo(f"[goaloop] phase={event.phase.value} {line}")
 
-    return _print if enabled else None
+    return _print
+
+
+def _progress_line(kind: str, payload: dict[str, object]) -> str | None:
+    loop = payload.get("loop")
+    loop_part = f" loop={loop}" if loop is not None else ""
+    messages = {
+        "preprocess:started": f"step=started repo={payload.get('repo')} source={payload.get('source')}",
+        "preprocess:done": f"step=completed ready={payload.get('ready')} duration={payload.get('duration')}s",
+        "phase:enter": "step=entered",
+        "phase:resume": "step=resumed",
+        "generation:model_started": f"step=model_generation_started{loop_part}",
+        "generation:model_completed": f"step=model_generation_completed{loop_part} files={payload.get('files')}",
+        "generation:validation_started": f"step=artifact_validation_started{loop_part}",
+        "generation:validation_completed": f"step=artifact_validation_completed{loop_part}",
+        "generation:driver_unavailable": f"step=model_generation_failed{loop_part}",
+        "generation:model_invalid": f"step=model_output_invalid{loop_part}",
+        "generation:policy_rejected": f"step=artifact_policy_rejected{loop_part}",
+        "execution:materialized": f"step=candidate_materialized{loop_part}",
+        "execution:cmake_configure_started": f"step=cmake_configure_started{loop_part}",
+        "execution:cmake_configure": f"step=cmake_configure_completed{loop_part} exit={payload.get('exit_code')}",
+        "execution:cmake_build_started": f"step=cmake_build_started{loop_part}",
+        "execution:cmake_build": f"step=cmake_build_completed{loop_part} exit={payload.get('exit_code')}",
+        "execution:cmake_library": f"step=cmake_library_selected{loop_part}",
+        "execution:compile_started": f"step=compile_started{loop_part}",
+        "execution:compile": f"step=compile_completed{loop_part} exit={payload.get('exit_code')}",
+        "execution:fuzz_started": f"step=fuzz_started{loop_part} budget={payload.get('seconds')}s",
+        "execution:fuzz": (
+            f"step=fuzz_completed{loop_part} exit={payload.get('exit_code')} duration={payload.get('duration')}s"
+        ),
+        "execution:coverage_started": f"step=coverage_started{loop_part}",
+        "execution:coverage": f"step=coverage_completed{loop_part} ok={payload.get('ok')}",
+        "execution:decided": (
+            f"step=decision_completed{loop_part} decision={payload.get('decision')} "
+            f"target_hit={payload.get('target_function_hit')} target_cov={payload.get('target_line_coverage')}"
+        ),
+        "crash:analysis_started": f"step=crash_analysis_started{loop_part} artifacts={payload.get('artifacts')}",
+        "crash:analysis": (
+            f"step=crash_analysis_completed ownership={payload.get('ownership')} "
+            f"reproductions={payload.get('reproductions')}"
+        ),
+        "report:write_started": f"step=report_write_started status={payload.get('status')}",
+        "report:written": f"step=report_written status={payload.get('status')}",
+        "run:terminal": f"step=terminal status={payload.get('status')} reason={payload.get('reason')}",
+        "run:resumed": f"step=terminal_cleared previous_status={payload.get('from_status')}",
+        "corpus:seed": f"step=seed_corpus copied={payload.get('copied')} ok={payload.get('ok')}",
+    }
+    return messages.get(kind)
 
 
 def _sdk_importable() -> bool:
