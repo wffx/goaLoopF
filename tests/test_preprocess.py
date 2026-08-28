@@ -307,3 +307,47 @@ def test_angle_bracket_and_missing_includes_ignored(workspace_root: Path, defaul
     assert "src/target.c" in paths
     # missing.h does not exist and other.h is not referenced: both must stay out.
     assert "src/other.h" not in paths
+
+
+def test_build_dir_mode_excludes_build_files(workspace_root: Path, default_profile: object) -> None:
+    src = workspace_root / "repos" / "cmake-proj"
+    _write(
+        src,
+        "src/target.c",
+        '#include <stdint.h>\n#include "target.h"\nint cmake_parse(const uint8_t *d, size_t s) { return d[s - 1]; }\n',
+    )
+    _write(src, "include/target.h", "int cmake_parse(const uint8_t *, size_t);\n")
+    _write(src, "CMakeLists.txt", "add_library(cmake_target STATIC src/target.c)\n")
+    result = preprocess_request(
+        workspace_root,
+        "run-build-dir",
+        _request(workspace_root, source=str(src), function="cmake_parse", build_dir=str(src)),
+        default_profile,  # type: ignore[arg-type]
+        check_runtime=False,
+    )
+    assert result.ready
+    assert result.build_dir == src.resolve()
+    paths = [ctx.path for ctx in result.contexts]
+    assert "src/target.c" in paths
+    assert "include/target.h" in paths
+    # Build-file contents are redundant when the controller builds the
+    # project itself: only the resolved path is exposed.
+    assert "CMakeLists.txt" not in paths
+    assert not any(ctx.path in {"CMakeLists.txt", "Makefile"} for ctx in result.contexts)
+
+
+def test_no_build_dir_keeps_build_files(workspace_root: Path, default_profile: object) -> None:
+    (workspace_root / "repos" / "safe" / "Makefile").write_text(
+        "all:\n\tclang -o fuzzer src/safe.c\n", encoding="utf-8"
+    )
+    result = preprocess_request(
+        workspace_root,
+        "run-no-build-dir",
+        _request(workspace_root),
+        default_profile,  # type: ignore[arg-type]
+        check_runtime=False,
+    )
+    assert result.build_dir is None
+    paths = [ctx.path for ctx in result.contexts]
+    assert "src/safe.c" in paths
+    assert "Makefile" in paths  # the model must infer build params on its own

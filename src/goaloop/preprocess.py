@@ -56,6 +56,13 @@ def preprocess_request(
     project_name = source_root.name if source_root.name else "unknown"
     repos_root = (workspace_root / "repos").resolve()
     inside_repos = source_root.is_relative_to(repos_root)
+    # Resolve the CMake build directory up front (does not require it to
+    # exist yet; existence is checked below for the ready path).
+    resolved_build_dir: Path | None = None
+    if request.build_dir is not None:
+        resolved_build_dir = (
+            request.build_dir if request.build_dir.is_absolute() else workspace_root / request.build_dir
+        ).resolve()
 
     basic_caps: list[Capability] = []
     if not source_root.is_dir():
@@ -148,6 +155,10 @@ def preprocess_request(
         files,
         max_context_bytes,
         target_symbol=request.function,
+        # In --build-dir mode the controller builds the project itself, so
+        # build-file contents are redundant (the model cannot read files and
+        # must not guess build parameters); the resolved path is enough.
+        include_build_files=request.build_dir is None,
     )
     signatures = _candidate_signatures(matching, request.function)
     capabilities = [
@@ -175,6 +186,7 @@ def preprocess_request(
             capability_report=report,
             terminal_status=TerminalStatus.BLOCKED,
             reason=f"required runtime capabilities unavailable: {missing}",
+            build_dir=resolved_build_dir,
         )
     return PreprocessResult(
         run_id=run_id,
@@ -186,6 +198,7 @@ def preprocess_request(
         contexts=contexts,
         candidate_signatures=signatures,
         capability_report=report,
+        build_dir=resolved_build_dir,
     )
 
 
@@ -246,6 +259,7 @@ def _collect_context(
     files: list[Path],
     max_context_bytes: int | None = None,
     target_symbol: str | None = None,
+    include_build_files: bool = True,
 ) -> list[SourceContext]:
     """Collect source context by relevance, not by directory sweep.
 
@@ -255,7 +269,9 @@ def _collect_context(
        symbol-window truncation for oversized files;
     2. their quoted-include closure (transitively) and same-basename
        headers — 32 KiB each;
-    3. build files (CMakeLists.txt / Makefile / ...) — 16 KiB each;
+    3. build files (CMakeLists.txt / Makefile / ...) — 16 KiB each, unless
+       --build-dir mode is in use (the controller builds the project itself,
+       so build-file contents are redundant);
     4. caller/reference files (mention the symbol without defining it,
        e.g. tests) — 16 KiB each, last.
 
@@ -266,7 +282,9 @@ def _collect_context(
     budget = MAX_CONTEXT_TOTAL_BYTES if max_context_bytes is None else max_context_bytes
     definitions, references = _definition_files(matches, target_symbol)
     windowed = {path.resolve() for path in definitions}
-    selected = _select_context_files(root, definitions, references, files, target_symbol)
+    selected = _select_context_files(
+        root, definitions, references, files, target_symbol, include_build_files=include_build_files
+    )
     result: list[SourceContext] = []
     total = 0
     for path, per_file_cap in selected:
@@ -325,6 +343,7 @@ def _select_context_files(
     references: list[Path],
     files: list[Path],
     symbol: str | None,
+    include_build_files: bool = True,
 ) -> list[tuple[Path, int]]:
     """Order candidate files by relevance, returning (path, per-file cap)."""
     selected: list[tuple[Path, int]] = []
@@ -343,8 +362,9 @@ def _select_context_files(
         add(path, MAX_DEPENDENCY_FILE_BYTES)
     for path in _same_basename_headers(definitions, files):
         add(path, MAX_DEPENDENCY_FILE_BYTES)
-    for path in sorted(item for item in files if item.name in BUILD_NAMES):
-        add(path, MAX_BUILD_FILE_BYTES)
+    if include_build_files:
+        for path in sorted(item for item in files if item.name in BUILD_NAMES):
+            add(path, MAX_BUILD_FILE_BYTES)
     for path in references:
         add(path, MAX_REFERENCE_FILE_BYTES)
     return selected

@@ -192,7 +192,10 @@ openrouter/xai）+ 手写 OpenAI 兼容网关。自定义网关端点/模型名�
      最后一次出现处附近的窗口），而不是盲取文件头；
   2. **依赖闭包**：定义文件 `#include "..."`（引号形式）传递解析到源码树内
      的文件 + 同 basename 头文件（`cJSON.c` → `cJSON.h`）——每文件 32 KiB；
-  3. **构建文件**（CMakeLists/Makefile 等）——每文件 16 KiB；
+  3. **构建文件**（CMakeLists/Makefile 等）——每文件 16 KiB。**仅非
+     `--build-dir` 模式**：此时模型必须自己推断构建参数，需要构建文件作
+     参考；`--build-dir` 模式下控制器负责构建，构建文件内容不再进入上下文，
+     只暴露解析后的路径（`PreprocessResult.build_dir`）；
   4. **调用方/引用文件**（只是调用或声明了目标函数，如测试）——每文件
      16 KiB，排在最后，预算有余量才进入。
 
@@ -239,6 +242,9 @@ goaloop run --source repos/<project> --function <symbol> --build-dir repos/<proj
 
 - 模型生成的 `BuildPlan.target_sources` 在构建模式下被忽略——产品源码来自库，
   模型只写 harness，显著降低 token 消耗。
+- **构建文件内容不再进入上下文**：`preprocess.json` 的 `contexts` 不含
+  CMakeLists/Makefile 内容，只通过 `PreprocessResult.build_dir` 暴露解析后的
+  工程路径——构建知识完全由 `--build-dir` 工程承载，模型无需（也无法）猜测。
 - 库产物查找：`profiles/*.toml` 的 `[build] library`（相对
   `goaloop-build`）优先，否则自动取第一个 `*.a`（多库工程请显式声明）；
   `[build] include_dirs`（相对 build-dir）与 `[build] flags` 可附加。

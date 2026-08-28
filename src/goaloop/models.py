@@ -236,6 +236,11 @@ class PreprocessResult(Contract):
     capability_report: CapabilityReport
     terminal_status: TerminalStatus | None = None
     reason: str | None = None
+    # Resolved CMake build directory when --build-dir mode is used. In that
+    # mode the controller builds the project itself and build-file contents
+    # are excluded from contexts, so this path is the only build info the
+    # model receives (it cannot read files anyway).
+    build_dir: Path | None = None
 
     @model_validator(mode="after")
     def terminal_state_matches_readiness(self) -> PreprocessResult:
