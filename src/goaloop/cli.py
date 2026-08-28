@@ -14,6 +14,7 @@ import typer
 from .backend import LocalLinuxBackend, toolchain_capabilities
 from .config import load_model_profile, load_validation_profile
 from .driver import DeepSeekHarnessDriver
+from .krepo import krepo_cli_path
 from .models import Capability, FuzzRunRequest, Language, ModelProfile, RunEvent, RunState
 from .report import REPORT_FILENAME, VALIDATION_FILENAME
 from .storage import ArtifactStore, create_run_id
@@ -285,6 +286,14 @@ def doctor(
             detail="importable" if sdk_available else "not installed",
         )
     )
+    krepo_cli = krepo_cli_path(ws)
+    capabilities.append(
+        Capability(
+            name="krepo",
+            available=krepo_cli.is_file(),
+            detail=str(krepo_cli) if krepo_cli.is_file() else f"missing: {krepo_cli}",
+        )
+    )
     env_key = os.environ.get(model.api_key_env)
     has_key = bool(env_key or model.api_key)
     source = "profile api_key" if model.api_key else f"{model.api_key_env} set"
@@ -553,6 +562,12 @@ def _progress_line(kind: str, payload: dict[str, object]) -> str | None:
     loop_part = f" loop={loop}" if loop is not None else ""
     messages = {
         "preprocess:started": f"step=started repo={payload.get('repo')} source={payload.get('source')}",
+        "preprocess:krepo_started": f"step=krepo_started file={payload.get('file')}",
+        "preprocess:krepo_completed": (
+            f"step=krepo_completed incoming={payload.get('incoming_functions')} "
+            f"outgoing={payload.get('outgoing_functions')}"
+        ),
+        "preprocess:krepo_failed": f"step=krepo_failed reason={payload.get('reason')}",
         "preprocess:done": f"step=completed ready={payload.get('ready')} duration={payload.get('duration')}s",
         "phase:enter": "step=entered",
         "phase:resume": "step=resumed",

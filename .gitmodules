@@ -1,0 +1,3 @@
+[submodule "tools/kRepo"]
+	path = tools/kRepo
+	url = https://github.com/wffx/kRepo.git

@@ -5,6 +5,7 @@
 - 工作区根目录：`GOALOOP_WORKSPACE` 环境变量，或当前目录；相对 `--repo` 路径以此为根
 - Profile 搜索路径：`<workspace>/profiles/` → `~/.config/goaloop/profiles/`
 - 模型 Profile 搜索路径：`<workspace>/model-profiles/` → `~/.config/goaloop/model-profiles/`
+- kRepo：默认 `<workspace>/tools/kRepo/`；可用 `GOALOOP_KREPO` 指向 kRepo 根目录或 `cpp_meta_query.py`
 - 所有 run 产物写入 `work/<project>/runs/<run-id>/`
 - 原始模型会话：`.private-sessions/<run-id>/`（仅供恢复审计）
 
@@ -74,7 +75,10 @@ goaloop report --run-id <id> [--output <dir>] [--format markdown|json] [--worksp
 goaloop doctor [--profile default] [--model-profile default] [--workspace <path>]
 ```
 
-逐项检查：Linux 平台、clang/clang++/llvm-profdata/llvm-cov、bubblewrap（仅 sandbox.required 时）、SDK 可导入、API key 已设置。全部 ok 时 `environment is ready`（exit 0），否则 exit 1。
+逐项检查：Linux 平台、clang/clang++/llvm-profdata/llvm-cov、bubblewrap（仅
+`sandbox.required` 时）、kRepo CLI、SDK 可导入、API key 已设置。全部 ok 时
+`environment is ready`（exit 0），否则 exit 1。具体被测仓的
+`.vscode/BROWSE.VC.DB` 在执行 preprocess 时检查。
 
 ### `goaloop evaluate` — 批量研究
 
@@ -196,23 +200,17 @@ openrouter/xai）+ 手写 OpenAI 兼容网关。自定义网关端点/模型名�
 - **每一轮生成都重新内嵌全部源码上下文**（`preprocess.json` 中的 `contexts`）。
   默认预算 96 KiB ≈ 25–32K token；旧默认 256 KiB ≈ 65–85K token。用
   `--max-context-kb` 调小即可直接压缩每次输入。
-- **文件按相关性分层选择，不再扫描整个仓库**（复杂工程的关键修复）：
+- **函数级上下文替代整文件和调用方文件**：
 
-  1. **定义文件**（目标函数体所在文件，即 `symbol(...) {` 出现的文件）——
-     每文件 64 KiB；超大文件用**符号窗口**截取（文件头 4 KiB + 目标函数
-     最后一次出现处附近的窗口），而不是盲取文件头；
-  2. **依赖闭包**：定义文件 `#include "..."`（引号形式）传递解析到源码树内
-     的文件 + 同 basename 头文件（`cJSON.c` → `cJSON.h`）——每文件 32 KiB；
-  3. **构建文件**（CMakeLists/Makefile 等）——每文件 16 KiB。**仅非
-     `--build-dir` 模式**：此时模型必须自己推断构建参数，需要构建文件作
-     参考；`--build-dir` 模式下控制器负责构建，构建文件内容不再进入上下文，
-     只暴露解析后的路径（`PreprocessResult.build_dir`）；
-  4. **调用方/引用文件**（只是调用或声明了目标函数，如测试）——每文件
-     16 KiB，排在最后，预算有余量才进入。
+  1. kRepo `report --format json` 返回的目标函数原始实现片段，最多占预算的 1/2；
+  2. kRepo 生成的 `incoming_tree` 和 `outgoing_tree`，各最多占预算的 1/4；
+  3. 定义文件的 quoted-include 传递闭包和同 basename 头，每文件最多 32 KiB；
+  4. 构建文件每文件最多 16 KiB；`--build-dir` 模式仍不注入构建文件。
 
-  其余无关文件**一律不包含**。旧实现先放目标文件与构建文件，然后把整个
-  仓库剩下的文件按字节填充预算，复杂工程里 preprocess.json 因此被测试/
-  其他模块撑爆。
+  原调用/引用文件不再整文件进入 prompt，调用关系由两棵去重调用树代替。
+- **kRepo 前置条件**：初始化 `tools/kRepo` 子模块，并用 VS Code C/C++ 扩展为
+  被测仓生成 `.vscode/BROWSE.VC.DB`。goaloop 只执行只读统一报告，不调用
+  `source`/`outgoingFuncs` 等写文件命令。缺少工具或数据库时 run 进入 `blocked`。
 - **会话不再跨轮累积**：每一轮生成使用独立 session（`<run-id>-gNN`），
   提示词只出现一次；结构化 `latest_feedback` 携带两轮之间的差异。旧实现所有
   轮共用同一 session，第 N 轮的输入 ≈ N 份源码上下文 + 历史回复，第 2~3 轮

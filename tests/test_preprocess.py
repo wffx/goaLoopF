@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
 
+from goaloop import preprocess as preprocess_module
+from goaloop.krepo import KRepoError
 from goaloop.models import FuzzRunRequest, Language, TerminalStatus
 from goaloop.preprocess import preprocess_request
 
@@ -45,7 +48,37 @@ def test_ready_preprocess(workspace_root: Path, default_profile: object) -> None
     assert result.language is Language.C
     assert result.target_function == "safe_parse"
     assert any(ctx.path == "src/safe.c" for ctx in result.contexts)
+    assert [context.kind for context in result.contexts[:3]] == [
+        "target_function",
+        "incoming_tree",
+        "outgoing_tree",
+    ]
+    target = result.contexts[0]
+    assert target.content.startswith("int safe_parse")
+    assert "#include" not in target.content
+    assert json.loads(result.contexts[1].content)["functions"]
+    assert json.loads(result.contexts[2].content)["functions"]
     assert result.candidate_signatures
+
+
+def test_krepo_failure_blocks_preprocess(
+    workspace_root: Path, default_profile: object, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def _fail(*args: object, **kwargs: object) -> object:
+        raise KRepoError("BROWSE.VC.DB missing")
+
+    monkeypatch.setattr(preprocess_module, "read_krepo_report", _fail)
+    result = preprocess_request(
+        workspace_root,
+        "run-krepo-missing",
+        _request(workspace_root),
+        default_profile,  # type: ignore[arg-type]
+        check_runtime=False,
+    )
+
+    assert not result.ready
+    assert result.terminal_status is TerminalStatus.BLOCKED
+    assert "BROWSE.VC.DB missing" in (result.reason or "")
 
 
 def test_missing_repository_directory(workspace_root: Path, default_profile: object) -> None:
@@ -126,8 +159,10 @@ def test_source_directory_disambiguates_duplicate_functions(
     assert result.ready
     assert result.source_root == repo.resolve()
     assert result.source_scope == (repo / "second").resolve()
-    assert [context.path for context in result.contexts] == ["second/target.c"]
+    assert result.contexts[0].path == "second/target.c"
+    assert result.contexts[0].kind == "target_function"
     assert "return 2" in result.contexts[0].content
+    assert {context.kind for context in result.contexts[1:]} == {"incoming_tree", "outgoing_tree"}
 
 
 def test_source_file_disambiguates_duplicate_functions(workspace_root: Path, default_profile: object) -> None:
@@ -150,7 +185,9 @@ def test_source_file_disambiguates_duplicate_functions(workspace_root: Path, def
 
     assert result.ready
     assert result.source_scope == selected.resolve()
-    assert [context.path for context in result.contexts] == ["src/second.c"]
+    assert result.contexts[0].path == "src/second.c"
+    assert result.contexts[0].kind == "target_function"
+    assert {context.kind for context in result.contexts[1:]} == {"incoming_tree", "outgoing_tree"}
 
 
 def test_candidate_signatures_exclude_comments_and_call_sites(
@@ -225,8 +262,11 @@ def test_cpp_language_detection(workspace_root: Path, default_profile: object) -
 
 
 def test_context_truncation_budget(workspace_root: Path, default_profile: object) -> None:
-    (workspace_root / "repos" / "safe" / "src" / "huge.c").write_text(
-        "// safe_parse\n" + "x" * 512 * 1024, encoding="utf-8"
+    (workspace_root / "repos" / "safe" / "src" / "safe.c").write_text(
+        "int safe_parse(const unsigned char *data, unsigned long size) {\n/*"
+        + "x" * 64 * 1024
+        + "*/\nreturn size ? data[0] : 0;\n}\n",
+        encoding="utf-8",
     )
     result = preprocess_request(
         workspace_root,
@@ -241,8 +281,11 @@ def test_context_truncation_budget(workspace_root: Path, default_profile: object
 
 
 def test_context_budget_default_applies(workspace_root: Path, default_profile: object) -> None:
-    (workspace_root / "repos" / "safe" / "src" / "huge.c").write_text(
-        "// safe_parse\n" + "x" * 512 * 1024, encoding="utf-8"
+    (workspace_root / "repos" / "safe" / "src" / "safe.c").write_text(
+        "int safe_parse(const unsigned char *data, unsigned long size) {\n/*"
+        + "x" * 128 * 1024
+        + "*/\nreturn size ? data[0] : 0;\n}\n",
+        encoding="utf-8",
     )
     result = preprocess_request(
         workspace_root,
@@ -324,9 +367,7 @@ def test_same_basename_header_included_without_symbol(workspace_root: Path, defa
     assert "src/target.h" in paths
 
 
-def test_large_target_file_uses_symbol_window(workspace_root: Path, default_profile: object) -> None:
-    # The target symbol sits ~300 KiB into a huge file: the head-only
-    # truncation would miss it entirely; the symbol window must not.
+def test_large_target_file_keeps_only_raw_function_fragment(workspace_root: Path, default_profile: object) -> None:
     src = workspace_root / "repos" / "deep"
     body = "int deep_fn(const uint8_t *d, size_t s) { return d[s - 1]; }\n"
     _write(src, "src/deep.c", "/* " + "x" * (300 * 1024) + " */\n" + body)
@@ -338,14 +379,14 @@ def test_large_target_file_uses_symbol_window(workspace_root: Path, default_prof
         check_runtime=False,
     )
     ctx = next(item for item in result.contexts if item.path == "src/deep.c")
-    assert ctx.truncated
+    assert ctx.kind == "target_function"
+    assert not ctx.truncated
     assert "deep_fn" in ctx.content
-    assert len(ctx.content) <= 64 * 1024
+    assert "x" * 100 not in ctx.content
+    assert ctx.start_line == 2
 
 
-def test_callers_deprioritized_over_definition(workspace_root: Path, default_profile: object) -> None:
-    # A huge caller (test) file merely invokes the function: it must be
-    # capped at the reference tier and never crowd out the definition.
+def test_callers_are_replaced_by_krepo_call_trees(workspace_root: Path, default_profile: object) -> None:
     src = workspace_root / "repos" / "callers"
     _write(
         src,
@@ -368,12 +409,12 @@ def test_callers_deprioritized_over_definition(workspace_root: Path, default_pro
         check_runtime=False,
     )
     paths = [ctx.path for ctx in result.contexts]
-    assert paths.index("src/target.c") < paths.index("tests/huge_caller.c")
-    caller = next(item for item in result.contexts if item.path == "tests/huge_caller.c")
-    definition = next(item for item in result.contexts if item.path == "src/target.c")
-    assert caller.truncated
-    assert len(caller.content) <= 16 * 1024
-    assert not definition.truncated
+    assert "src/target.c" in paths
+    assert "tests/huge_caller.c" not in paths
+    assert "analysis/incomingTree.json" in paths
+    assert "analysis/outgoingTree.json" in paths
+    assert next(item for item in result.contexts if item.kind == "incoming_tree").content
+    assert next(item for item in result.contexts if item.kind == "outgoing_tree").content
 
 
 def test_angle_bracket_and_missing_includes_ignored(workspace_root: Path, default_profile: object) -> None:

@@ -290,6 +290,7 @@ class RunController(GenerationMixin, ReportMixin):
             self.profile,
             api_key_env=self.model_profile.api_key_env if self.model_profile is not None else "DEEPSEEK_API_KEY",
             max_context_bytes=self.request.max_context_kb * 1024,
+            on_progress=self._progress,
         )
         self.preprocess = preprocess
         self.state.project_name = preprocess.project_name

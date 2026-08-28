@@ -92,7 +92,13 @@
 ## 数据流
 
 ```
-FuzzRunRequest ──► preprocess ──► PreprocessResult ──► driver.generate_artifacts()
+FuzzRunRequest ──► preprocess ──► kRepo report（只读 BROWSE.VC.DB）
+                                      │
+                                      ▼
+                         函数原片段 + incoming/outgoing tree
+                                      │
+                                      ▼
+                              PreprocessResult ──► driver.generate_artifacts()
                                                           │
                                                           ▼
                                               GeneratedArtifactSet（JSON）

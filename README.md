@@ -11,13 +11,23 @@ harness，在用户授权的源码中编译、执行并发现可复现的软件�
 ## 安装
 
 ```bash
+git clone --recurse-submodules https://github.com/wffx/goaLoopF.git
+cd goaLoop
 python -m venv .venv
 source .venv/bin/activate
 python -m pip install -e '.[dsh,dev]'   # -e 开发模式；dsh=模型 SDK，dev=测试/静态检查
 ```
 
+已有 checkout 需初始化只读 kRepo 子模块：
+
+```bash
+git submodule update --init --recursive
+```
+
 运行环境：Clang/Clang++（自带 libFuzzer）、`llvm-profdata`、`llvm-cov`、
-`DEEPSEEK_API_KEY`。默认无沙箱运行（沙箱为可选，见
+`DEEPSEEK_API_KEY`。每个被测仓还需由 VS Code C/C++ 扩展生成
+`<repo>/.vscode/BROWSE.VC.DB`；预处理只读调用 `tools/kRepo` 的统一报告，取得
+目标函数原始片段和上下游调用树。默认无沙箱运行（沙箱为可选，见
 [doc/cli.md](doc/cli.md#沙箱选项)）。
 
 ## 快速使用
@@ -68,6 +78,7 @@ src/goaloop/
 ├── models.py          # Pydantic 数据契约
 ├── config.py          # 验证/模型 Profile 加载
 ├── preprocess.py      # 源码范围、符号查找、上下文收集、能力探测
+├── krepo.py           # kRepo 只读子进程适配器（函数片段 + 上下游调用树）
 ├── storage.py         # run 目录、原子写入、事件日志、候选物化
 ├── validation.py      # 工件策略、编译/fuzz argv、指标解析、决策
 ├── backend.py         # LocalLinuxBackend：执行、资源限制、可选沙箱
@@ -78,6 +89,9 @@ src/goaloop/
 ├── workflow/          # 四阶段状态机（controller/generation/report）
 └── cli.py             # run/resume/status/report/evaluate/doctor
 ```
+
+第三方工具 `tools/kRepo/` 以 Git 子模块固定版本引入；goaloop 不修改其源码，也不调用
+会生成源码包的命令，仅读取 `report --format json` 的标准输出。
 
 ## 文档
 

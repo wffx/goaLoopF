@@ -210,11 +210,17 @@ class CapabilityReport(Contract):
         return all(item.available for item in self.capabilities)
 
 
+SourceContextKind = Literal["target_function", "incoming_tree", "outgoing_tree", "dependency", "build"]
+
+
 class SourceContext(Contract):
+    kind: SourceContextKind = "dependency"
     path: str
     sha256: str
     content: str
     truncated: bool = False
+    start_line: int | None = Field(default=None, ge=1)
+    end_line: int | None = Field(default=None, ge=1)
 
     @field_validator("path")
     @classmethod

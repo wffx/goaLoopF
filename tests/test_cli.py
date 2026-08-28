@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from goaloop.cli import _event_printer, app
@@ -54,7 +55,14 @@ class TestDoctor:
     def test_ready_with_key(self, workspace_root: Path) -> None:
         result = runner.invoke(app, ["doctor", "--workspace", str(workspace_root)])
         assert result.exit_code == 0
+        assert "krepo" in result.output
         assert "environment is ready" in result.output
+
+    def test_missing_krepo_is_not_ready(self, workspace_root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("GOALOOP_KREPO", str(workspace_root / "missing-krepo"))
+        result = runner.invoke(app, ["doctor", "--workspace", str(workspace_root)])
+        assert result.exit_code == 1
+        assert "krepo" in result.output
 
     def test_missing_profile(self, workspace_root: Path) -> None:
         result = runner.invoke(app, ["doctor", "--profile", "nope", "--workspace", str(workspace_root)])

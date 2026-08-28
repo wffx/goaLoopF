@@ -4,12 +4,16 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
+import json
 import os
 import platform
 import re
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 from .backend import toolchain_capabilities
+from .krepo import KRepoError, KRepoReport, read_krepo_report
 from .models import (
     Capability,
     CapabilityReport,
@@ -17,6 +21,7 @@ from .models import (
     Language,
     PreprocessResult,
     SourceContext,
+    SourceContextKind,
     TerminalStatus,
     ValidationProfile,
 )
@@ -30,7 +35,7 @@ BUILD_NAMES = {"CMakeLists.txt", "Makefile", "meson.build", "BUILD", "BUILD.baze
 MAX_TARGET_FILE_BYTES = 64 * 1024
 MAX_DEPENDENCY_FILE_BYTES = 32 * 1024
 MAX_BUILD_FILE_BYTES = 16 * 1024
-MAX_REFERENCE_FILE_BYTES = 16 * 1024
+MAX_CALL_TREE_BYTES = 16 * 1024
 # Fallback total context budget when the caller does not pass one; the
 # controller always derives it from FuzzRunRequest.max_context_kb.
 MAX_CONTEXT_TOTAL_BYTES = 256 * 1024
@@ -51,6 +56,7 @@ def preprocess_request(
     check_runtime: bool = True,
     api_key_env: str = "DEEPSEEK_API_KEY",
     max_context_bytes: int | None = None,
+    on_progress: Callable[[str, dict[str, Any]], None] | None = None,
 ) -> PreprocessResult:
     workspace_root = workspace_root.resolve()
     repo_root, source_scope = _resolve_request_paths(workspace_root, request)
@@ -179,16 +185,65 @@ def preprocess_request(
         )
 
     language = _detect_language(request.language, matching, files)
+    definitions, _references = _definition_files(matching, request.function)
+    if not definitions:
+        basic_caps.append(Capability(name="target_function", available=False, detail="definition not found"))
+        return _not_ready(
+            run_id,
+            project_name,
+            repo_root,
+            request,
+            basic_caps,
+            TerminalStatus.NEEDS_INPUT,
+            f"target function {request.function!r} was mentioned but no implementation was found under {source_scope}",
+            source_scope=source_scope,
+        )
+
+    target_source = definitions[0]
+    _notify_progress(
+        on_progress,
+        "preprocess:krepo_started",
+        {"function": request.function, "file": target_source.relative_to(repo_root).as_posix()},
+    )
+    try:
+        krepo_report = read_krepo_report(
+            workspace_root,
+            repo_root,
+            target_source,
+            request.function,
+        )
+    except KRepoError as exc:
+        basic_caps.append(Capability(name="krepo_context", available=False, detail=str(exc)))
+        _notify_progress(on_progress, "preprocess:krepo_failed", {"reason": str(exc)})
+        return _not_ready(
+            run_id,
+            project_name,
+            repo_root,
+            request,
+            basic_caps,
+            TerminalStatus.BLOCKED,
+            f"kRepo context generation failed: {exc}",
+            source_scope=source_scope,
+        )
+    _notify_progress(
+        on_progress,
+        "preprocess:krepo_completed",
+        {
+            "source_chars": len(krepo_report.source),
+            "incoming_functions": _tree_function_count(krepo_report.incoming_tree),
+            "outgoing_functions": _tree_function_count(krepo_report.outgoing_tree),
+        },
+    )
     # The source-context budget comes from the request (CLI --max-context-kb);
     # an explicit override wins when provided (used by tests).
     if max_context_bytes is None:
         max_context_bytes = request.max_context_kb * 1024
     contexts = _collect_context(
         repo_root,
-        matching,
+        definitions,
         files,
+        krepo_report,
         max_context_bytes,
-        target_symbol=request.function,
         # In --build-dir mode the controller builds the project itself, so
         # build-file contents are redundant (the model cannot read files and
         # must not guess build parameters); the resolved path is enough.
@@ -205,6 +260,7 @@ def preprocess_request(
         ),
         Capability(name="source_scope", available=True, detail=f"target {scope_kind}: {scope_path}"),
         Capability(name="target_function", available=True, detail=f"found in {len(matching)} file(s)"),
+        Capability(name="krepo_context", available=True, detail="source and call trees loaded from kRepo report"),
     ]
     if check_runtime:
         capabilities.extend(_runtime_capabilities(profile, api_key_env=api_key_env))
@@ -302,62 +358,114 @@ def _detect_language(requested: Language, matches: list[Path], files: list[Path]
 
 def _collect_context(
     root: Path,
-    matches: list[Path],
+    definitions: list[Path],
     files: list[Path],
+    krepo_report: KRepoReport,
     max_context_bytes: int | None = None,
-    target_symbol: str | None = None,
     include_build_files: bool = True,
 ) -> list[SourceContext]:
-    """Collect source context by relevance, not by directory sweep.
-
-    Files are selected in tiers, each with its own per-file cap:
-
-    1. definition files (the target function's body) — 64 KiB each, with a
-       symbol-window truncation for oversized files;
-    2. their quoted-include closure (transitively) and same-basename
-       headers — 32 KiB each;
-    3. build files (CMakeLists.txt / Makefile / ...) — 16 KiB each, unless
-       --build-dir mode is in use (the controller builds the project itself,
-       so build-file contents are redundant);
-    4. caller/reference files (mention the symbol without defining it,
-       e.g. tests) — 16 KiB each, last.
-
-    Unrelated files are never included: in large projects a blanket sweep
-    consumed the whole budget on code the model does not need, blowing up
-    preprocess.json past the model's input-token limit.
-    """
+    """Collect the kRepo target snippet/trees, then related headers and build files."""
     budget = MAX_CONTEXT_TOTAL_BYTES if max_context_bytes is None else max_context_bytes
-    definitions, references = _definition_files(matches, target_symbol)
-    windowed = {path.resolve() for path in definitions}
-    selected = _select_context_files(
-        root, definitions, references, files, target_symbol, include_build_files=include_build_files
-    )
     result: list[SourceContext] = []
     total = 0
-    for path, per_file_cap in selected:
-        if total >= budget:
-            break
+    target_cap = min(MAX_TARGET_FILE_BYTES, max(1, budget // 2))
+    tree_cap = min(MAX_CALL_TREE_BYTES, max(1, budget // 4))
+    target_file = definitions[0]
+    total += _append_text_context(
+        result,
+        kind="target_function",
+        path=target_file.relative_to(root).as_posix(),
+        content=krepo_report.source,
+        cap=min(target_cap, budget - total),
+        start_line=krepo_report.start_line,
+        end_line=krepo_report.end_line,
+    )
+    total += _append_text_context(
+        result,
+        kind="incoming_tree",
+        path="analysis/incomingTree.json",
+        content=json.dumps(krepo_report.incoming_tree, ensure_ascii=False, indent=2, sort_keys=True),
+        cap=min(tree_cap, budget - total),
+    )
+    total += _append_text_context(
+        result,
+        kind="outgoing_tree",
+        path="analysis/outgoingTree.json",
+        content=json.dumps(krepo_report.outgoing_tree, ensure_ascii=False, indent=2, sort_keys=True),
+        cap=min(tree_cap, budget - total),
+    )
+
+    dependencies = _include_closure(root, definitions, files) + _same_basename_headers(definitions, files)
+    selected: list[tuple[Path, int, SourceContextKind]] = [
+        (path, MAX_DEPENDENCY_FILE_BYTES, "dependency") for path in dependencies
+    ]
+    if include_build_files:
+        selected.extend((path, MAX_BUILD_FILE_BYTES, "build") for path in files if path.name in BUILD_NAMES)
+    seen: set[Path] = set()
+    for path, per_file_cap, kind in selected:
+        resolved = path.resolve()
+        if resolved in seen or total >= budget:
+            continue
+        seen.add(resolved)
         try:
-            raw = path.read_bytes()
+            raw = resolved.read_bytes()
         except OSError:
             continue
         available = min(per_file_cap, budget - total)
-        content_bytes = raw
-        if len(content_bytes) > available:
-            if target_symbol is not None and path in windowed:
-                content_bytes = _symbol_window(raw, target_symbol, cap=available)
-            else:
-                content_bytes = raw[:available]
-        total += len(content_bytes)
+        content = raw[:available].decode("utf-8", errors="replace")
         result.append(
             SourceContext(
-                path=path.relative_to(root).as_posix(),
+                kind=kind,
+                path=resolved.relative_to(root).as_posix(),
                 sha256=hashlib.sha256(raw).hexdigest(),
-                content=content_bytes.decode("utf-8", errors="replace"),
-                truncated=len(raw) > len(content_bytes),
+                content=content,
+                truncated=len(raw) > available,
             )
         )
+        total += min(len(raw), available)
     return result
+
+
+def _append_text_context(
+    contexts: list[SourceContext],
+    *,
+    kind: SourceContextKind,
+    path: str,
+    content: str,
+    cap: int,
+    start_line: int | None = None,
+    end_line: int | None = None,
+) -> int:
+    if cap <= 0:
+        return 0
+    raw = content.encode("utf-8")
+    selected = raw[:cap]
+    contexts.append(
+        SourceContext(
+            kind=kind,
+            path=path,
+            sha256=hashlib.sha256(raw).hexdigest(),
+            content=selected.decode("utf-8", errors="replace"),
+            truncated=len(raw) > len(selected),
+            start_line=start_line,
+            end_line=end_line,
+        )
+    )
+    return len(selected)
+
+
+def _notify_progress(
+    callback: Callable[[str, dict[str, Any]], None] | None,
+    kind: str,
+    payload: dict[str, Any],
+) -> None:
+    if callback is not None:
+        callback(kind, payload)
+
+
+def _tree_function_count(tree: dict[str, Any]) -> int:
+    functions = tree.get("functions")
+    return len(functions) if isinstance(functions, list) else 0
 
 
 def _definition_files(matches: list[Path], symbol: str | None) -> tuple[list[Path], list[Path]]:
@@ -382,39 +490,6 @@ def _definition_files(matches: list[Path], symbol: str | None) -> tuple[list[Pat
             continue
         (definitions if pattern.search(text) else references).append(path)
     return definitions, references
-
-
-def _select_context_files(
-    root: Path,
-    definitions: list[Path],
-    references: list[Path],
-    files: list[Path],
-    symbol: str | None,
-    include_build_files: bool = True,
-) -> list[tuple[Path, int]]:
-    """Order candidate files by relevance, returning (path, per-file cap)."""
-    selected: list[tuple[Path, int]] = []
-    seen: set[Path] = set()
-
-    def add(path: Path, cap: int) -> None:
-        resolved = path.resolve()
-        if resolved in seen:
-            return
-        seen.add(resolved)
-        selected.append((resolved, cap))
-
-    for path in definitions:
-        add(path, MAX_TARGET_FILE_BYTES)
-    for path in _include_closure(root, definitions, files):
-        add(path, MAX_DEPENDENCY_FILE_BYTES)
-    for path in _same_basename_headers(definitions, files):
-        add(path, MAX_DEPENDENCY_FILE_BYTES)
-    if include_build_files:
-        for path in sorted(item for item in files if item.name in BUILD_NAMES):
-            add(path, MAX_BUILD_FILE_BYTES)
-    for path in references:
-        add(path, MAX_REFERENCE_FILE_BYTES)
-    return selected
 
 
 def _include_closure(root: Path, seeds: list[Path], files: list[Path]) -> list[Path]:
@@ -481,32 +556,6 @@ def _same_basename_headers(matches: list[Path], files: list[Path]) -> list[Path]
         if header is not None and header.resolve() != match.resolve():
             headers.add(header.resolve())
     return sorted(headers, key=lambda path: path.as_posix())
-
-
-def _symbol_window(raw: bytes, symbol: str, *, cap: int) -> bytes:
-    """Truncate an oversized target file around the symbol instead of the head.
-
-    Keeps a small head (includes/typedefs, up to 4 KiB) plus a window centered
-    on the last ``symbol(`` occurrence, so the model sees the function
-    definition even when it sits deep inside a huge file. Falls back to the
-    file head when the symbol never appears with an opening paren.
-    """
-    if len(raw) <= cap:
-        return raw
-    text = raw.decode("utf-8", errors="replace")
-    pattern = re.compile(rf"(?<![\w:]){re.escape(symbol)}\s*\(")
-    positions = [match.start() for match in pattern.finditer(text)]
-    if not positions:
-        return raw[:cap]
-    head = min(4096, cap // 4)
-    window_cap = cap - head
-    pos = positions[-1]
-    if pos < head:  # symbol already inside the head: keep the head
-        return raw[:cap]
-    start = max(0, pos - window_cap // 2)
-    end = min(len(text), start + window_cap)
-    window = text[start:end].encode("utf-8", errors="replace")[:window_cap]
-    return raw[:head] + b"\n/* ... goaloop truncated to symbol window ... */\n" + window
 
 
 def _candidate_signatures(matches: list[Path], symbol: str) -> list[str]:
