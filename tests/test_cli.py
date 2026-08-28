@@ -127,13 +127,15 @@ class TestReport:
 
 
 class TestRun:
-    def test_missing_source_is_needs_input(self, workspace_root: Path) -> None:
+    def test_missing_repo_is_needs_input(self, workspace_root: Path) -> None:
         result = runner.invoke(
             app,
             [
                 "run",
-                "--source",
+                "--repo",
                 "repos/does-not-exist",
+                "--source",
+                ".",
                 "--function",
                 "f",
                 "--workspace",
@@ -147,13 +149,38 @@ class TestRun:
         assert result.exit_code == 0
         assert "needs_input" in result.output
 
+    def test_missing_source_scope_is_needs_input(self, workspace_root: Path) -> None:
+        result = runner.invoke(
+            app,
+            [
+                "run",
+                "--repo",
+                "repos/safe",
+                "--source",
+                "src/does-not-exist.c",
+                "--function",
+                "safe_parse",
+                "--workspace",
+                str(workspace_root),
+                "--max-generation-loops",
+                "1",
+                "--fuzz-seconds",
+                "1",
+            ],
+        )
+        assert result.exit_code == 0
+        assert "needs_input" in result.output
+        assert "source path does not exist" in result.output
+
     def test_invalid_language(self, workspace_root: Path) -> None:
         result = runner.invoke(
             app,
             [
                 "run",
-                "--source",
+                "--repo",
                 "repos/safe",
+                "--source",
+                ".",
                 "--function",
                 "safe_parse",
                 "--language",
@@ -179,8 +206,10 @@ class TestOutputDir:
             app,
             [
                 "run",
-                "--source",
+                "--repo",
                 "repos/does-not-exist",
+                "--source",
+                ".",
                 "--function",
                 "f",
                 "--workspace",
@@ -269,8 +298,10 @@ class TestModelOverrides:
             app,
             [
                 "run",
-                "--source",
+                "--repo",
                 "repos/does-not-exist",
+                "--source",
+                ".",
                 "--function",
                 "f",
                 "--model-profile",

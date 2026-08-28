@@ -171,7 +171,7 @@ Python 为本次 run 创建一个具体且持久化的 `GenerationGoal`：**生�
 CLI：
 
 ```text
-goaloop run --source repos/<project> --function <symbol>
+goaloop run --repo repos/<project> --source <dir-or-file> --function <symbol>
              --language auto|c|cpp --profile <profile>
              [--model-profile <id>] [--max-generation-loops 5]
              [--fuzz-seconds 600]

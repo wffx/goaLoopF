@@ -54,6 +54,7 @@ class CrashOwnership(StrEnum):
 
 
 class FuzzRunRequest(Contract):
+    repo: Path | None = None
     source: Path
     function: Annotated[str, Field(min_length=1, max_length=256, pattern=r"^[\w:$~.<>-]+$")]
     language: Language = Language.AUTO
@@ -229,6 +230,7 @@ class PreprocessResult(Contract):
     ready: bool
     project_name: str
     source_root: Path
+    source_scope: Path | None = None
     language: Language
     target_function: str
     contexts: list[SourceContext] = Field(default_factory=list)

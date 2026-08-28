@@ -24,10 +24,16 @@ from goaloop.models import (
 
 class TestFuzzRunRequest:
     def test_defaults(self) -> None:
-        request = FuzzRunRequest(source="repos/x", function="parse")
+        request = FuzzRunRequest(repo="repos/x", source="src/parser.c", function="parse")
+        assert request.repo == Path("repos/x")
+        assert request.source == Path("src/parser.c")
         assert request.language is Language.AUTO
         assert request.max_generation_loops == 5
         assert request.fuzz_seconds == 600
+
+    def test_legacy_request_without_repo_remains_valid(self) -> None:
+        request = FuzzRunRequest(source="repos/x", function="parse")
+        assert request.repo is None
 
     def test_loop_bounds(self) -> None:
         with pytest.raises(ValidationError):

@@ -41,7 +41,7 @@ python -m venv .venv && source .venv/bin/activate
 python -m pip install -e '.[dsh,dev]'
 export DEEPSEEK_API_KEY='sk-...'
 goaloop doctor --profile default
-goaloop run --source repos/cJSON-1.7.17 --function cJSON_Parse --profile default
+goaloop run --repo repos/cJSON-1.7.17 --source cJSON.c --function cJSON_Parse --profile default
 ```
 
 具体说明见 [CLI 参考](cli.md)。

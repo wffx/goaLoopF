@@ -12,7 +12,8 @@ from goaloop.preprocess import preprocess_request
 
 def _request(workspace: Path, **overrides: object) -> FuzzRunRequest:
     values: dict[str, object] = {
-        "source": "repos/safe",
+        "repo": "repos/safe",
+        "source": ".",
         "function": "safe_parse",
         "language": Language.AUTO,
         "profile": "default",
@@ -47,11 +48,11 @@ def test_ready_preprocess(workspace_root: Path, default_profile: object) -> None
     assert result.candidate_signatures
 
 
-def test_missing_source_directory(workspace_root: Path, default_profile: object) -> None:
+def test_missing_repository_directory(workspace_root: Path, default_profile: object) -> None:
     result = preprocess_request(
         workspace_root,
         "run-2",
-        _request(workspace_root, source="repos/nope"),
+        _request(workspace_root, repo="repos/nope"),
         default_profile,  # type: ignore[arg-type]
         check_runtime=False,
     )
@@ -59,8 +60,7 @@ def test_missing_source_directory(workspace_root: Path, default_profile: object)
     assert result.terminal_status is TerminalStatus.NEEDS_INPUT
 
 
-def test_custom_source_directory(workspace_root: Path, default_profile: object, tmp_path: Path) -> None:
-    # Targets no longer have to live under repos/: any explicit directory works.
+def test_custom_repository_directory(workspace_root: Path, default_profile: object, tmp_path: Path) -> None:
     custom = tmp_path / "custom-proj"
     (custom / "src").mkdir(parents=True)
     (custom / "src" / "impl.c").write_text(
@@ -70,13 +70,13 @@ def test_custom_source_directory(workspace_root: Path, default_profile: object, 
     result = preprocess_request(
         workspace_root,
         "run-custom",
-        _request(workspace_root, source=str(custom), function="custom_parse"),
+        _request(workspace_root, repo=str(custom), function="custom_parse"),
         default_profile,  # type: ignore[arg-type]
         check_runtime=False,
     )
     assert result.ready
     assert result.project_name == "custom-proj"
-    scope = next(item for item in result.capability_report.capabilities if item.name == "source_scope")
+    scope = next(item for item in result.capability_report.capabilities if item.name == "repository_scope")
     assert "custom" in scope.detail
 
 
@@ -106,6 +106,65 @@ def test_target_symbol_not_found(workspace_root: Path, default_profile: object) 
     assert not result.ready
     assert result.terminal_status is TerminalStatus.NEEDS_INPUT
     assert "missing_symbol" in (result.reason or "")
+
+
+def test_source_directory_disambiguates_duplicate_functions(
+    workspace_root: Path, default_profile: object
+) -> None:
+    repo = workspace_root / "repos" / "duplicates"
+    _write(repo, "first/target.c", "int duplicate_fn(void) { return 1; }\n")
+    _write(repo, "second/target.c", "int duplicate_fn(void) { return 2; }\n")
+
+    result = preprocess_request(
+        workspace_root,
+        "run-duplicate-dir",
+        _request(workspace_root, repo="repos/duplicates", source="second", function="duplicate_fn"),
+        default_profile,  # type: ignore[arg-type]
+        check_runtime=False,
+    )
+
+    assert result.ready
+    assert result.source_root == repo.resolve()
+    assert result.source_scope == (repo / "second").resolve()
+    assert [context.path for context in result.contexts] == ["second/target.c"]
+    assert "return 2" in result.contexts[0].content
+
+
+def test_source_file_disambiguates_duplicate_functions(workspace_root: Path, default_profile: object) -> None:
+    repo = workspace_root / "repos" / "duplicate-files"
+    _write(repo, "src/first.c", "int duplicate_fn(void) { return 1; }\n")
+    selected = _write(repo, "src/second.c", "int duplicate_fn(void) { return 2; }\n")
+
+    result = preprocess_request(
+        workspace_root,
+        "run-duplicate-file",
+        _request(
+            workspace_root,
+            repo="repos/duplicate-files",
+            source="src/second.c",
+            function="duplicate_fn",
+        ),
+        default_profile,  # type: ignore[arg-type]
+        check_runtime=False,
+    )
+
+    assert result.ready
+    assert result.source_scope == selected.resolve()
+    assert [context.path for context in result.contexts] == ["src/second.c"]
+
+
+def test_source_path_must_stay_inside_repository(workspace_root: Path, default_profile: object) -> None:
+    result = preprocess_request(
+        workspace_root,
+        "run-source-escape",
+        _request(workspace_root, repo="repos/safe", source="../fragile", function="fragile_parse"),
+        default_profile,  # type: ignore[arg-type]
+        check_runtime=False,
+    )
+
+    assert not result.ready
+    assert result.terminal_status is TerminalStatus.NEEDS_INPUT
+    assert "inside repository" in (result.reason or "")
 
 
 def test_runtime_capabilities_gate_blocked(
@@ -185,7 +244,7 @@ def test_complex_project_skips_unrelated_files(workspace_root: Path, default_pro
     result = preprocess_request(
         workspace_root,
         "run-complex",
-        _request(workspace_root, source=str(src), function="target_fn", max_context_kb=64),
+        _request(workspace_root, repo=str(src), function="target_fn", max_context_kb=64),
         default_profile,  # type: ignore[arg-type]
         check_runtime=False,
     )
@@ -206,7 +265,7 @@ def test_include_closure_is_transitive(workspace_root: Path, default_profile: ob
     result = preprocess_request(
         workspace_root,
         "run-chain",
-        _request(workspace_root, source=str(src), function="tgt", max_context_kb=32),
+        _request(workspace_root, repo=str(src), function="tgt", max_context_kb=32),
         default_profile,  # type: ignore[arg-type]
         check_runtime=False,
     )
@@ -227,7 +286,7 @@ def test_same_basename_header_included_without_symbol(workspace_root: Path, defa
     result = preprocess_request(
         workspace_root,
         "run-noinc",
-        _request(workspace_root, source=str(src), function="target_fn", max_context_kb=32),
+        _request(workspace_root, repo=str(src), function="target_fn", max_context_kb=32),
         default_profile,  # type: ignore[arg-type]
         check_runtime=False,
     )
@@ -245,7 +304,7 @@ def test_large_target_file_uses_symbol_window(workspace_root: Path, default_prof
     result = preprocess_request(
         workspace_root,
         "run-deep",
-        _request(workspace_root, source=str(src), function="deep_fn", max_context_kb=96),
+        _request(workspace_root, repo=str(src), function="deep_fn", max_context_kb=96),
         default_profile,  # type: ignore[arg-type]
         check_runtime=False,
     )
@@ -275,7 +334,7 @@ def test_callers_deprioritized_over_definition(workspace_root: Path, default_pro
     result = preprocess_request(
         workspace_root,
         "run-callers",
-        _request(workspace_root, source=str(src), function="target_fn", max_context_kb=64),
+        _request(workspace_root, repo=str(src), function="target_fn", max_context_kb=64),
         default_profile,  # type: ignore[arg-type]
         check_runtime=False,
     )
@@ -299,7 +358,7 @@ def test_angle_bracket_and_missing_includes_ignored(workspace_root: Path, defaul
     result = preprocess_request(
         workspace_root,
         "run-sysinc",
-        _request(workspace_root, source=str(src), function="target_fn", max_context_kb=32),
+        _request(workspace_root, repo=str(src), function="target_fn", max_context_kb=32),
         default_profile,  # type: ignore[arg-type]
         check_runtime=False,
     )
@@ -321,7 +380,7 @@ def test_build_dir_mode_excludes_build_files(workspace_root: Path, default_profi
     result = preprocess_request(
         workspace_root,
         "run-build-dir",
-        _request(workspace_root, source=str(src), function="cmake_parse", build_dir=str(src)),
+        _request(workspace_root, repo=str(src), function="cmake_parse", build_dir=str(src)),
         default_profile,  # type: ignore[arg-type]
         check_runtime=False,
     )

@@ -52,10 +52,10 @@ def preprocess_request(
     max_context_bytes: int | None = None,
 ) -> PreprocessResult:
     workspace_root = workspace_root.resolve()
-    source_root = _resolve_source(workspace_root, request.source)
-    project_name = source_root.name if source_root.name else "unknown"
+    repo_root, source_scope = _resolve_request_paths(workspace_root, request)
+    project_name = repo_root.name if repo_root.name else "unknown"
     repos_root = (workspace_root / "repos").resolve()
-    inside_repos = source_root.is_relative_to(repos_root)
+    inside_repos = repo_root.is_relative_to(repos_root)
     # Resolve the CMake build directory up front (does not require it to
     # exist yet; existence is checked below for the ready path).
     resolved_build_dir: Path | None = None
@@ -65,16 +65,43 @@ def preprocess_request(
         ).resolve()
 
     basic_caps: list[Capability] = []
-    if not source_root.is_dir():
-        basic_caps.append(Capability(name="source", available=False, detail="source directory missing"))
+    if not repo_root.is_dir():
+        basic_caps.append(Capability(name="repo", available=False, detail="repository directory missing"))
         return _not_ready(
             run_id,
             project_name,
-            source_root,
+            repo_root,
             request,
             basic_caps,
             TerminalStatus.NEEDS_INPUT,
-            f"source directory does not exist: {source_root}",
+            f"repository directory does not exist: {repo_root}",
+            source_scope=source_scope,
+        )
+
+    if not source_scope.is_relative_to(repo_root):
+        basic_caps.append(Capability(name="source_scope", available=False, detail="outside repository"))
+        return _not_ready(
+            run_id,
+            project_name,
+            repo_root,
+            request,
+            basic_caps,
+            TerminalStatus.NEEDS_INPUT,
+            f"source path must be inside repository {repo_root}: {source_scope}",
+            source_scope=source_scope,
+        )
+
+    if not source_scope.is_dir() and not source_scope.is_file():
+        basic_caps.append(Capability(name="source_scope", available=False, detail="source path missing"))
+        return _not_ready(
+            run_id,
+            project_name,
+            repo_root,
+            request,
+            basic_caps,
+            TerminalStatus.NEEDS_INPUT,
+            f"source path does not exist: {source_scope}",
+            source_scope=source_scope,
         )
 
     if request.build_dir is not None:
@@ -88,60 +115,66 @@ def preprocess_request(
             return _not_ready(
                 run_id,
                 project_name,
-                source_root,
+                repo_root,
                 request,
                 basic_caps,
                 TerminalStatus.NEEDS_INPUT,
                 f"build directory does not exist: {build_dir}",
+                source_scope=source_scope,
             )
         if not (build_dir / "CMakeLists.txt").is_file():
             basic_caps.append(Capability(name="build_dir", available=False, detail="CMakeLists.txt missing"))
             return _not_ready(
                 run_id,
                 project_name,
-                source_root,
+                repo_root,
                 request,
                 basic_caps,
                 TerminalStatus.NEEDS_INPUT,
                 f"build directory has no CMakeLists.txt: {build_dir}",
+                source_scope=source_scope,
             )
         if profile.sandbox.required:
             basic_caps.append(Capability(name="build_dir", available=False, detail="cmake build requires no sandbox"))
             return _not_ready(
                 run_id,
                 project_name,
-                source_root,
+                repo_root,
                 request,
                 basic_caps,
                 TerminalStatus.BLOCKED,
                 "build-directory mode requires sandbox.required = false",
+                source_scope=source_scope,
             )
 
-    escape = _find_symlink_escape(source_root)
+    escape = _find_symlink_escape(repo_root)
     if escape is not None:
         basic_caps.append(Capability(name="source_scope", available=False, detail=str(escape)))
         return _not_ready(
             run_id,
             project_name,
-            source_root,
+            repo_root,
             request,
             basic_caps,
             TerminalStatus.NEEDS_INPUT,
-            f"symlink escapes source tree: {escape}",
+            f"symlink escapes repository tree: {escape}",
+            source_scope=source_scope,
         )
 
-    files = _source_files(source_root)
-    matching = _files_containing_symbol(files, request.function)
+    files = _source_files(repo_root)
+    scoped_files = _source_files(source_scope)
+    matching = _files_containing_symbol(scoped_files, request.function)
     if not matching:
         basic_caps.append(Capability(name="target_function", available=False, detail="symbol not found"))
         return _not_ready(
             run_id,
             project_name,
-            source_root,
+            repo_root,
             request,
             basic_caps,
             TerminalStatus.NEEDS_INPUT,
-            f"target function {request.function!r} was not found in source files",
+            f"target function {request.function!r} was not found under source path {source_scope}",
+            source_scope=source_scope,
         )
 
     language = _detect_language(request.language, matching, files)
@@ -150,7 +183,7 @@ def preprocess_request(
     if max_context_bytes is None:
         max_context_bytes = request.max_context_kb * 1024
     contexts = _collect_context(
-        source_root,
+        repo_root,
         matching,
         files,
         max_context_bytes,
@@ -161,12 +194,15 @@ def preprocess_request(
         include_build_files=request.build_dir is None,
     )
     signatures = _candidate_signatures(matching, request.function)
+    scope_kind = "file" if source_scope.is_file() else "directory"
+    scope_path = source_scope.relative_to(repo_root).as_posix() or "."
     capabilities = [
         Capability(
-            name="source_scope",
+            name="repository_scope",
             available=True,
-            detail="source under repos/" if inside_repos else "custom source directory (outside repos/)",
+            detail="repository under repos/" if inside_repos else "custom repository directory (outside repos/)",
         ),
+        Capability(name="source_scope", available=True, detail=f"target {scope_kind}: {scope_path}"),
         Capability(name="target_function", available=True, detail=f"found in {len(matching)} file(s)"),
     ]
     if check_runtime:
@@ -178,7 +214,8 @@ def preprocess_request(
             run_id=run_id,
             ready=False,
             project_name=project_name,
-            source_root=source_root,
+            source_root=repo_root,
+            source_scope=source_scope,
             language=language,
             target_function=request.function,
             contexts=contexts,
@@ -192,7 +229,8 @@ def preprocess_request(
         run_id=run_id,
         ready=True,
         project_name=project_name,
-        source_root=source_root,
+        source_root=repo_root,
+        source_scope=source_scope,
         language=language,
         target_function=request.function,
         contexts=contexts,
@@ -202,9 +240,15 @@ def preprocess_request(
     )
 
 
-def _resolve_source(workspace_root: Path, source: Path) -> Path:
-    path = source if source.is_absolute() else workspace_root / source
-    return path.resolve(strict=False)
+def _resolve_request_paths(workspace_root: Path, request: FuzzRunRequest) -> tuple[Path, Path]:
+    if request.repo is None:
+        repo = request.source if request.source.is_absolute() else workspace_root / request.source
+        repo_root = repo.resolve(strict=False)
+        return repo_root, repo_root
+    repo = request.repo if request.repo.is_absolute() else workspace_root / request.repo
+    repo_root = repo.resolve(strict=False)
+    source = request.source if request.source.is_absolute() else repo_root / request.source
+    return repo_root, source.resolve(strict=False)
 
 
 def _find_symlink_escape(root: Path) -> Path | None:
@@ -216,6 +260,8 @@ def _find_symlink_escape(root: Path) -> Path | None:
 
 
 def _source_files(root: Path) -> list[Path]:
+    if root.is_file():
+        return [root] if root.suffix.lower() in SOURCE_SUFFIXES or root.name in BUILD_NAMES else []
     selected: list[Path] = []
     for path in root.rglob("*"):
         if not path.is_file():
@@ -508,12 +554,15 @@ def _not_ready(
     capabilities: list[Capability],
     status: TerminalStatus,
     reason: str,
+    *,
+    source_scope: Path | None = None,
 ) -> PreprocessResult:
     return PreprocessResult(
         run_id=run_id,
         ready=False,
         project_name=project_name,
         source_root=source_root,
+        source_scope=source_scope,
         language=request.language,
         target_function=request.function,
         capability_report=CapabilityReport(platform=platform.platform(), capabilities=capabilities),

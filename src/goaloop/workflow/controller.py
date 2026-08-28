@@ -125,7 +125,8 @@ class RunController(GenerationMixin, ReportMixin):
             run_id=run_id,
             objective=(
                 f"generate a libFuzzer harness for {self.request.function} in "
-                f"{self.request.source} that compiles, executes, and reaches the target function"
+                f"{self.request.source} within repository {self.request.repo or self.request.source} "
+                "that compiles, executes, and reaches the target function"
             ),
             target_function=self.request.function,
             acceptance_criteria=[

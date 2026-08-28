@@ -214,11 +214,23 @@ class ReportMixin:
         # preprocess.json is missing (e.g. an interrupted resume); the contract
         # requires a non-ready result to carry a terminal_status.
         assert self.state is not None
+        repo = self.request.repo or self.request.source
+        source_root = (repo if repo.is_absolute() else self.workspace_root / repo).resolve(strict=False)
+        source_scope = (
+            source_root
+            if self.request.repo is None
+            else (
+                self.request.source
+                if self.request.source.is_absolute()
+                else source_root / self.request.source
+            ).resolve(strict=False)
+        )
         return PreprocessResult(
             run_id=self.state.run_id,
             ready=False,
             project_name=self.state.project_name,
-            source_root=self.workspace_root / "repos" / self.state.project_name,
+            source_root=source_root,
+            source_scope=source_scope,
             language=self.request.language,
             target_function=self.request.function,
             capability_report=CapabilityReport(platform="unknown", capabilities=[]),

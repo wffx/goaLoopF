@@ -25,10 +25,11 @@ python -m pip install -e '.[dsh,dev]'   # -e 开发模式；dsh=模型 SDK，dev
 ```bash
 export DEEPSEEK_API_KEY='...'
 goaloop doctor --profile default
-goaloop run --source repos/cJSON-1.7.17 --function cJSON_Parse --profile default
+goaloop run --repo repos/cJSON-1.7.17 --source . --function cJSON_Parse --profile default
 ```
 
-- 源码放在 `repos/<project>/`（或任意自定义目录，见下）
+- 代码仓放在 `repos/<project>/`（或任意自定义目录，见下）；`--source` 指定仓内
+  被测函数所在目录或文件
 - 所有输出写入 `work/<project>/runs/<run-id>/`（可用 `--output <dir>` 指定
   产物根目录），报告为 `report.md`
 - 支持 `resume` / `status` / `report` / `evaluate`，详见 [doc/cli.md](doc/cli.md)
@@ -42,7 +43,7 @@ goaloop run --source repos/cJSON-1.7.17 --function cJSON_Parse --profile default
 `repos/<project>/`，也接受**任意自定义目录**：
 
 ```bash
-goaloop run --source /path/to/any/project --function <symbol> --profile default
+goaloop run --repo /path/to/any/project --source src/parser.c --function <symbol> --profile default
 ```
 
 不同项目可配置各自的验证 Profile（构建宏、链接库等构建知识固化在
@@ -56,7 +57,8 @@ goaloop run --source /path/to/any/project --function <symbol> --profile default
 节省 token：
 
 ```bash
-goaloop run --source repos/<project> --function <symbol> --build-dir repos/<project> --profile default
+goaloop run --repo repos/<project> --source src/target.c --function <symbol> \
+  --build-dir repos/<project> --profile default
 ```
 
 ## 模块结构

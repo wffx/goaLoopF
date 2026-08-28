@@ -36,7 +36,8 @@ FUZZ_SECONDS = 2
 
 def _request(workspace: Path, *, source: str, function: str, loops: int = 3) -> FuzzRunRequest:
     return FuzzRunRequest(
-        source=source,
+        repo=source,
+        source=".",
         function=function,
         language=Language.C,
         profile="default",

@@ -2,7 +2,7 @@
 
 ## 通用约定
 
-- 工作区根目录：`GOALOOP_WORKSPACE` 环境变量，或当前目录（需包含 `repos/`）
+- 工作区根目录：`GOALOOP_WORKSPACE` 环境变量，或当前目录；相对 `--repo` 路径以此为根
 - Profile 搜索路径：`<workspace>/profiles/` → `~/.config/goaloop/profiles/`
 - 模型 Profile 搜索路径：`<workspace>/model-profiles/` → `~/.config/goaloop/model-profiles/`
 - 所有 run 产物写入 `work/<project>/runs/<run-id>/`
@@ -13,7 +13,7 @@
 ### `goaloop run` — 完整四阶段流程
 
 ```bash
-goaloop run --source repos/<project> --function <symbol>
+goaloop run --repo repos/<project> --source <dir-or-file> --function <symbol>
             [--language auto|c|cpp] [--profile default]
             [--model-profile default] [--max-generation-loops 5]
             [--fuzz-seconds 600] [--workspace <path>]
@@ -21,7 +21,8 @@ goaloop run --source repos/<project> --function <symbol>
 
 | 参数 | 默认 | 说明 |
 |---|---|---|
-| `--source` | 必填 | 源码目录，相对于 workspace 或绝对路径，必须在 `repos/` 下 |
+| `--repo` | 必填 | 代码仓根目录，相对于 workspace 或使用绝对路径 |
+| `--source` | 必填 | 被测函数所在目录或文件；相对路径以 `--repo` 为根，绝对路径也必须位于仓内。符号查找仅在此范围执行，用于区分同仓同名函数 |
 | `--function` | 必填 | 目标函数符号（`[\\w:][\\w:$~.<>-]*`） |
 | `--language` | `auto` | 自动检测 / `c` / `cpp` |
 | `--profile` | `default` | 验证 Profile 名称 |
@@ -85,7 +86,7 @@ suite.json 格式：
 ```json
 {
   "entries": [
-    {"source": "repos/cJSON-1.7.17", "function": "cJSON_Parse", "max_generation_loops": 3, "fuzz_seconds": 30}
+    {"repo": "repos/cJSON-1.7.17", "source": "cJSON.c", "function": "cJSON_Parse", "max_generation_loops": 3, "fuzz_seconds": 30}
   ]
 }
 ```
@@ -99,7 +100,7 @@ suite.json 格式：
 goaloop doctor --profile default
 
 # 2. 对 cJSON 跑一次完整流程（默认无沙箱，30s fuzz，最多 3 轮模型生成）
-goaloop run --source repos/cJSON-1.7.17 --function cJSON_Parse --fuzz-seconds 30 --max-generation-loops 3
+goaloop run --repo repos/cJSON-1.7.17 --source cJSON.c --function cJSON_Parse --fuzz-seconds 30 --max-generation-loops 3
 
 # 3. 查看状态
 goaloop status --run-id 20260819T...  # 输出摘要
@@ -133,20 +134,20 @@ goaloop evaluate suite.json --repetitions 3
 
 ```bash
 # DeepSeek 官方（默认）
-goaloop run --source ... --function ... --model-profile default
+goaloop run --repo ... --source ... --function ... --model-profile default
 
 # 通过 pi-ai 使用 OpenAI（需 export OPENAI_API_KEY）
-goaloop run --source ... --function ... --model-profile pi-ai-openai
+goaloop run --repo ... --source ... --function ... --model-profile pi-ai-openai
 
 # 自定义 OpenAI 兼容网关（vLLM/Ollama，需 export CUSTOM_GATEWAY_API_KEY 等）
-goaloop run --source ... --function ... --model-profile pi-ai-custom
+goaloop run --repo ... --source ... --function ... --model-profile pi-ai-custom
 ```
 
 除 `export` 环境变量外，也可在命令行直接覆盖模型连接参数（优先级
 CLI > Profile > 默认）：
 
 ```bash
-goaloop run --source ... --function ... \
+goaloop run --repo ... --source ... --function ... \
     --model-profile default \
     --model-name gpt-4o \
     --base-url https://proxy.example/v1 \
@@ -214,10 +215,10 @@ openrouter/xai）+ 手写 OpenAI 兼容网关。自定义网关端点/模型名�
 
 ```bash
 # 源码很大时降低上下文预算（96 KiB → 64 KiB），每次模型输入约省 10K token
-goaloop run --source repos/<project> --function <symbol> --max-context-kb 64
+goaloop run --repo repos/<project> --source src/target.c --function <symbol> --max-context-kb 64
 
 # 排查：把输入窗口守卫调低，快速触发并确认报错信息
-goaloop run --source repos/<project> --function <symbol> --max-input-tokens 40000
+goaloop run --repo repos/<project> --source src/target.c --function <symbol> --max-input-tokens 40000
 ```
 
 ## CMake 构建目录模式（可选）
@@ -226,7 +227,7 @@ goaloop run --source repos/<project> --function <symbol> --max-input-tokens 4000
 `CMakeLists.txt`）让控制器在该目录内完成构建：
 
 ```bash
-goaloop run --source repos/<project> --function <symbol> --build-dir repos/<project>
+goaloop run --repo repos/<project> --source src/target.c --function <symbol> --build-dir repos/<project>
 ```
 
 流程（均在 `<build-dir>` 内完成，out-of-source）：
@@ -266,7 +267,7 @@ sudo apt install bubblewrap
 
 # 2. 用沙箱 Profile 运行（与 default 相同的工具链与覆盖策略，仅多了沙箱隔离）
 goaloop doctor --profile sandboxed
-goaloop run --source repos/... --function ... --profile sandboxed
+goaloop run --repo repos/... --source ... --function ... --profile sandboxed
 ```
 
 沙箱不可用（未装 bwrap）时，`sandboxed` Profile 会在预处理阶段判为 `blocked`，不会

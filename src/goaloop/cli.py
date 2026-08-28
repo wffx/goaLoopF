@@ -52,7 +52,8 @@ def _load_run_state(run_dir: Path) -> RunState:
 
 @app.command()
 def run(
-    source: Path = typer.Option(..., "--source", help="source directory below repos/"),
+    repo: Path = typer.Option(..., "--repo", help="code repository root directory"),
+    source: Path = typer.Option(..., "--source", help="target function directory or file within the repository"),
     function: str = typer.Option(..., "--function", help="target function symbol"),
     language: str = typer.Option("auto", "--language", help="auto | c | cpp"),
     profile: str = typer.Option("default", "--profile", help="validation profile name"),
@@ -100,6 +101,7 @@ def run(
     """Run the full four-phase workflow for one target function."""
     ws = _workspace_root(workspace)
     request = FuzzRunRequest(
+        repo=repo,
         source=source,
         function=function,
         language=Language(language),
@@ -138,7 +140,7 @@ def run(
         output_root=output,
         on_event=_verbose_event_printer(verbose),
     )
-    typer.echo(f"[goaloop] run {run_id} started (source={source}, function={function})")
+    typer.echo(f"[goaloop] run {run_id} started (repo={repo}, source={source}, function={function})")
     try:
         state = controller.run()
     finally:
@@ -330,6 +332,7 @@ def evaluate(
     for entry in entries:
         request = FuzzRunRequest.model_validate(
             {
+                "repo": entry.get("repo"),
                 "source": entry["source"],
                 "function": entry["function"],
                 "language": entry.get("language", "auto"),
@@ -387,6 +390,7 @@ def evaluate(
             results.append(
                 {
                     "run_id": run_id,
+                    "repo": request.repo.as_posix() if request.repo is not None else None,
                     "source": request.source.as_posix(),
                     "function": request.function,
                     "repetition": repetition,
