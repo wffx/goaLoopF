@@ -450,6 +450,26 @@ class TestDeepSeekHarnessDriver:
         with pytest.raises(DriverUnavailable, match="error"):
             driver.generate_artifacts(goal=_goal(), preprocess=_preprocess(), feedback=None)
 
+    def test_empty_completed_response_reports_finish_reason(self) -> None:
+        driver = _real_driver()
+        driver._harness = FakeHarness([""], finish_reason="completed")
+        with pytest.raises(DriverUnavailable, match="empty response.*completed.*run-live-g01"):
+            driver.generate_artifacts(goal=_goal(), preprocess=_preprocess(), feedback=None)
+        assert driver.format_retries == 0
+
+    def test_invalid_json_reports_redacted_response_previews(self) -> None:
+        driver = _real_driver()
+        driver._harness = FakeHarness(["not json sk-123456789", "still not json /tmp/private/file"])
+        with pytest.raises(GenerationFailure) as raised:
+            driver.generate_artifacts(goal=_goal(), preprocess=_preprocess(), feedback=None)
+        message = str(raised.value)
+        assert "response_chars=" in message
+        assert "redacted_preview=" in message
+        assert "sk-123456789" not in message
+        assert "/tmp/private/file" not in message
+        assert "<redacted>" in message
+        assert "<path>" in message
+
     def test_empty_response_with_max_tokens_is_failure(self) -> None:
         driver = _real_driver()
         driver._harness = FakeHarness([""], finish_reason="max-tokens")

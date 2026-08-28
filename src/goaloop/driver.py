@@ -163,6 +163,7 @@ class DeepSeekHarnessDriver:
         except StaleResponseError as exc:
             raise GenerationFailure(f"stale model response rejected: {exc}") from exc
         except (json.JSONDecodeError, ValidationError, ValueError) as exc:
+            first_diagnostic = _response_diagnostic(first, exc, self.workspace_root)
             retry_prompt = build_format_retry_prompt(prompt, exc, expected_loop=loop)
             second = self._run_prompt(retry_prompt, session_id=session_id)
             self.format_retries += 1
@@ -171,7 +172,12 @@ class DeepSeekHarnessDriver:
             except StaleResponseError as exc2:
                 raise GenerationFailure(f"stale model response rejected: {exc2}") from exc2
             except (json.JSONDecodeError, ValidationError, ValueError) as exc2:
-                raise GenerationFailure(f"model response remained invalid after the format retry: {exc2}") from exc2
+                retry_diagnostic = _response_diagnostic(second, exc2, self.workspace_root)
+                raise GenerationFailure(
+                    "model response remained invalid after the format retry: "
+                    f"first_error={exc}; {first_diagnostic}; "
+                    f"retry_error={exc2}; {retry_diagnostic}"
+                ) from exc2
 
     def complete_goal(self, *, goal: GenerationGoal, summary: str) -> None:
         try:
@@ -242,15 +248,23 @@ class DeepSeekHarnessDriver:
             raise
         except Exception as exc:
             raise DriverUnavailable(f"SDK call failed: {exc}") from exc
-        if result.finish_reason == "error" and not result.final_response.strip():
-            # Endpoint/runtime failure (auth, rate limit, network, ...) is a
-            # retryable environment condition, not an invalid model output.
+        raw_response = getattr(result, "final_response", None)
+        response = "" if raw_response is None else str(raw_response)
+        finish_reason = str(getattr(result, "finish_reason", "unknown"))
+        if not response.strip():
             detail = _extract_turn_error(getattr(result, "events", []), getattr(result, "notifications", []))
-            suffix = f": {detail}" if detail else ""
-            raise DriverUnavailable(f"model turn ended with error and no response{suffix}")
-        if result.finish_reason == "max-tokens" and not result.final_response.strip():
-            raise GenerationFailure("model turn ended with max-tokens and no response")
-        return str(result.final_response)
+            if detail:
+                detail = redact(detail, self.workspace_root)
+            suffix = f"; endpoint_detail={detail}" if detail else ""
+            message = (
+                "model turn returned an empty response "
+                f"(finish_reason={finish_reason!r}, session_id={session_id!r}){suffix}"
+            )
+            normalized_reason = finish_reason.lower().replace("_", "-")
+            if normalized_reason in {"max-tokens", "length"}:
+                raise GenerationFailure(f"{message}; increase the model profile max_tokens output limit")
+            raise DriverUnavailable(message)
+        return response
 
     def _coerce(
         self,
@@ -391,6 +405,20 @@ def _extract_turn_error(events: list[Any], notifications: list[Any]) -> str | No
                 except (TypeError, ValueError):
                     return str(payload)[:500]
     return None
+
+
+def _response_diagnostic(text: str, error: Exception, workspace_root: Path) -> str:
+    """Return bounded, redacted metadata for an invalid model response."""
+    detail = f"response_chars={len(text)}"
+    if not isinstance(error, json.JSONDecodeError):
+        return detail
+    preview = " ".join(text.split())
+    if not preview:
+        return f"{detail}, preview=<empty>"
+    preview = redact(preview, workspace_root)
+    if len(preview) > 240:
+        preview = preview[:240] + "..."
+    return f"{detail}, redacted_preview={preview!r}"
 
 
 def extract_json(text: str) -> dict[str, Any]:

@@ -153,6 +153,35 @@ def test_source_file_disambiguates_duplicate_functions(workspace_root: Path, def
     assert [context.path for context in result.contexts] == ["src/second.c"]
 
 
+def test_candidate_signatures_exclude_comments_and_call_sites(
+    workspace_root: Path, default_profile: object
+) -> None:
+    repo = workspace_root / "repos" / "signature-filter"
+    _write(repo, "include/target.h", "API int target_fn(const char *value);\n")
+    _write(
+        repo,
+        "src/target.c",
+        "/* target_fn() returns a parsed value. */\n"
+        "int target_fn(const char *value) { return value != 0; }\n"
+        "int caller(const char *value) { return target_fn(value); }\n"
+        "void assign(const char *value) { int result = target_fn(value); (void)result; }\n",
+    )
+
+    result = preprocess_request(
+        workspace_root,
+        "run-signature-filter",
+        _request(workspace_root, repo="repos/signature-filter", function="target_fn"),
+        default_profile,  # type: ignore[arg-type]
+        check_runtime=False,
+    )
+
+    assert result.ready
+    assert set(result.candidate_signatures) == {
+        "API int target_fn(const char *value)",
+        "int target_fn(const char *value)",
+    }
+
+
 def test_source_path_must_stay_inside_repository(workspace_root: Path, default_profile: object) -> None:
     result = preprocess_request(
         workspace_root,

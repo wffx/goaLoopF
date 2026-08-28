@@ -175,6 +175,15 @@ api_key = "sk-your-openai-key-here"   # 可选：明文凭据
 > 在仓库内，**不要提交含真实 key 的 profile**；建议用环境变量，或把含 key 的
 > profile 放到 `~/.config/goaloop/model-profiles/`（用户级路径，不入库）。
 
+### 模型空响应与格式错误
+
+模型返回普通空内容时，goaloop 将 run 标记为 `blocked`；因输出 token 耗尽而为空
+则标记为 `failed`。reason 会输出 `finish_reason`、`session_id` 以及 SDK 事件中
+可提取的脱敏端点错误，不再将空内容误报为 `Expecting value: line 1 column 1`。
+模型两次返回非 JSON 内容时，reason 会包含
+首次与格式重试响应的字符数和最多 240 字符的脱敏预览，便于区分拒答、代理错误页
+和普通格式偏差。完整 SDK 会话仍位于 `.private-sessions/<run-id>/`。
+
 `cordis/goaloop.pi-ai.cordis.yml` 挂载 `@deepseek-ai/dsh-llm-pi-ai` 多 provider
 适配器：内置 catalog 路由（deepseek/openai/anthropic/google/groq/mistral/
 openrouter/xai）+ 手写 OpenAI 兼容网关。自定义网关端点/模型名可用

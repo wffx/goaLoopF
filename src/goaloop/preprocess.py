@@ -39,6 +39,7 @@ _INCLUDE_QUOTED_RE = re.compile(r'^\s*#\s*include\s+"([^"]+)"', re.MULTILINE)
 # A definition is `symbol(` ... `)` followed (possibly across lines) by a
 # body opening brace; a mere call site or declaration does not qualify.
 _DEFINITION_RE_TEMPLATE = r"(?<![\w:]){symbol}\s*\([^;{{}}]*\)\s*\{{"
+_SOURCE_COMMENT_RE = re.compile(r"//[^\n]*|/\*.*?\*/", re.DOTALL)
 
 
 def preprocess_request(
@@ -516,13 +517,27 @@ def _candidate_signatures(matches: list[Path], symbol: str) -> list[str]:
             text = path.read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
+        text = _SOURCE_COMMENT_RE.sub(lambda match: "\n" * match.group(0).count("\n"), text)
         for match in pattern.finditer(text):
             signature = " ".join(match.group(0).split())
-            if signature and signature not in signatures:
+            symbol_match = re.search(rf"\b{re.escape(symbol)}\s*\(", signature)
+            prefix = signature[: symbol_match.start()].strip() if symbol_match is not None else ""
+            if _looks_like_signature_prefix(prefix) and signature not in signatures:
                 signatures.append(signature)
             if len(signatures) >= 10:
                 return signatures
     return signatures
+
+
+def _looks_like_signature_prefix(prefix: str) -> bool:
+    """Reject obvious call expressions while retaining C/C++ declarations."""
+    if not prefix or "=" in prefix or "#" in prefix:
+        return False
+    if re.search(r"\b(?:return|if|while|for|switch|sizeof|assert)\s*$", prefix):
+        return False
+    if prefix.count("(") != prefix.count(")") or prefix.count("[") != prefix.count("]"):
+        return False
+    return re.fullmatch(r"\([^()]+\)", prefix) is None
 
 
 def _runtime_capabilities(profile: ValidationProfile, *, api_key_env: str = "DEEPSEEK_API_KEY") -> list[Capability]:

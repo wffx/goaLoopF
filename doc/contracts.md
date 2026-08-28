@@ -14,7 +14,7 @@
 
 | 模型 | 用途 | 关键约束 |
 |---|---|---|
-| `PreprocessResult` | 预处理输出 | `source_root` 为仓库边界，`source_scope` 为符号搜索范围；`ready` 与 `terminal_status` 互斥 |
+| `PreprocessResult` | 预处理输出 | `source_root` 为仓库边界，`source_scope` 为符号搜索范围；`candidate_signatures` 是范围内启发式提取的声明/定义（头文件声明、实现或重载可产生多个成员，最多 10 个）；`ready` 与 `terminal_status` 互斥 |
 | `SourceContext` | 源码文件内容 + SHA-256 | `path` 必须相对、无 `..`、无 `\\`；`truncated` 标记是否截断 |
 | `CapabilityReport` / `Capability` | 工具链能力探测 | `ready` 属性 = 全部 `available` |
 
