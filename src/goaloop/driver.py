@@ -268,14 +268,27 @@ class DeepSeekHarnessDriver:
         return GeneratedArtifactSet.model_validate(data)
 
     def _staleness_error(self, data: dict[str, Any], goal: GenerationGoal, loop: int) -> Exception | None:
-        # Cross-run / cross-version contamination is fatal and never retried;
-        # a mismatched loop is a fixable mistake and may use the format retry.
-        if data.get("schema_version") != SCHEMA_VERSION:
-            return StaleResponseError(f"response carries unexpected schema_version: {data.get('schema_version')!r}")
-        if data.get("run_id") != self.run_id:
-            return StaleResponseError(f"response belongs to a different run: {data.get('run_id')!r}")
-        if data.get("phase") != "harness_generation":
-            return StaleResponseError(f"response carries unexpected phase: {data.get('phase')!r}")
+        # A MISSING envelope field means the model did not echo the required
+        # contract fields (it may have copied the prompt's example object, which
+        # intentionally omits them) — a fixable output defect that uses the one
+        # allowed format retry. A PRESENT-but-different value means the response
+        # belongs to another run/version — fatal contamination, never retried.
+        # A mismatched loop is a fixable mistake and may use the format retry.
+        schema = data.get("schema_version")
+        if schema is None:
+            return ValueError("response is missing the required schema_version field")
+        if schema != SCHEMA_VERSION:
+            return StaleResponseError(f"response carries unexpected schema_version: {schema!r}")
+        run_id = data.get("run_id")
+        if run_id is None:
+            return ValueError("response is missing the required run_id field")
+        if run_id != self.run_id:
+            return StaleResponseError(f"response belongs to a different run: {run_id!r}")
+        phase = data.get("phase")
+        if phase is None:
+            return ValueError("response is missing the required phase field")
+        if phase != "harness_generation":
+            return StaleResponseError(f"response carries unexpected phase: {phase!r}")
         if data.get("generation_loop") != loop:
             return ValueError(
                 f"response generation_loop {data.get('generation_loop')!r} does not match expected {loop}"
@@ -458,6 +471,9 @@ This is generation loop {expected_loop}.
 
 Constraints:
 - candidate_ready must be true.
+- The TOP-LEVEL object must include schema_version ("1.0"), run_id, phase and
+  generation_loop exactly as given in the Run context above; a missing or
+  different value is rejected. Do not copy the example shape verbatim.
 - files must include the harness source, Makefile, build.sh, endpoint.json and README.fuzz.md,
   and every path must be relative, using forward slashes, without "..".
 - build.sh and Makefile are for review only; the controller builds from endpoint_plan.build.

@@ -12,6 +12,7 @@ from goaloop.driver import (
     DriverUnavailable,
     GenerationFailure,
     ScriptedGenerationDriver,
+    StaleResponseError,
     build_format_retry_prompt,
     build_generation_prompt,
     estimate_tokens,
@@ -83,6 +84,59 @@ class TestDriverCoercion:
         payload = _full_payload()
         payload["run_id"] = "other-run"
         with pytest.raises(ValueError, match="different run"):
+            driver._coerce(json.dumps(payload), _goal(), 1, format_retry=0)
+
+    def test_staleness_rejects_wrong_schema_version_value(self) -> None:
+        # A present-but-different schema_version is contamination: fatal, no retry.
+        driver = DeepSeekHarnessDriver(
+            provider="p",
+            model="m",
+            max_tokens=None,
+            cordis=None,
+            workspace_root="/tmp/ws",
+            session_root="/tmp/ws/.private-sessions/run-d",
+            run_id="run-d",
+        )
+        payload = _full_payload()
+        payload["schema_version"] = "0.9"
+        with pytest.raises(StaleResponseError, match="unexpected schema_version"):
+            driver._coerce(json.dumps(payload), _goal(), 1, format_retry=0)
+
+    def test_missing_schema_version_is_retryable(self) -> None:
+        # A missing envelope field is a fixable output defect (e.g. the model
+        # copied the prompt's example object) and must use the format retry
+        # instead of killing the run as stale contamination.
+        driver = DeepSeekHarnessDriver(
+            provider="p",
+            model="m",
+            max_tokens=None,
+            cordis=None,
+            workspace_root="/tmp/ws",
+            session_root="/tmp/ws/.private-sessions/run-d",
+            run_id="run-d",
+        )
+        payload = _full_payload()
+        payload.pop("schema_version")
+        with pytest.raises(ValueError, match="missing the required schema_version"):
+            driver._coerce(json.dumps(payload), _goal(), 1, format_retry=0)
+
+    def test_missing_run_id_and_phase_are_retryable(self) -> None:
+        driver = DeepSeekHarnessDriver(
+            provider="p",
+            model="m",
+            max_tokens=None,
+            cordis=None,
+            workspace_root="/tmp/ws",
+            session_root="/tmp/ws/.private-sessions/run-d",
+            run_id="run-d",
+        )
+        payload = _full_payload()
+        payload.pop("run_id")
+        with pytest.raises(ValueError, match="missing the required run_id"):
+            driver._coerce(json.dumps(payload), _goal(), 1, format_retry=0)
+        payload = _full_payload()
+        payload.pop("phase")
+        with pytest.raises(ValueError, match="missing the required phase"):
             driver._coerce(json.dumps(payload), _goal(), 1, format_retry=0)
 
     def test_staleness_rejects_wrong_loop(self) -> None:
@@ -356,6 +410,19 @@ class TestDeepSeekHarnessDriver:
         assert artifacts.generation_loop == 1
         assert driver.format_retries == 1
         assert len(driver._harness.calls) == 2  # original + retry
+
+    def test_missing_schema_version_recovers_via_retry(self) -> None:
+        # The exact failure seen on a second validation environment: the model
+        # omits schema_version. It must be corrected by the format retry, not
+        # terminate the run as stale contamination.
+        first = _live_payload()
+        first.pop("schema_version")
+        driver = _real_driver()
+        driver._harness = FakeHarness([json.dumps(first), json.dumps(_live_payload())])
+        artifacts = driver.generate_artifacts(goal=_goal(), preprocess=_preprocess(), feedback=None)
+        assert artifacts.generation_loop == 1
+        assert driver.format_retries == 1
+        assert len(driver._harness.calls) == 2
 
     def test_format_retry_exhausted_raises(self) -> None:
         bad = _live_payload()
