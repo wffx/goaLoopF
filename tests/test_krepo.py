@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import pytest
@@ -51,14 +52,27 @@ def test_reads_report_json_without_writing_krepo(
     cli = tmp_path / "fake-krepo" / "main.py"
     _write_cli(cli, _payload())
     monkeypatch.setenv("GOALOOP_KREPO", str(cli))
+    commands: list[list[str]] = []
 
-    report = read_krepo_report(workspace, repo, source, "target_fn")
+    report = read_krepo_report(workspace, repo, source, "target_fn", on_command=commands.append)
 
     assert report.source.startswith("int target_fn")
     assert report.start_line == 1
     assert report.incoming_tree[0] == "Incoming call tree:"
     assert report.outgoing_tree[0] == "Outgoing call tree:"
     assert report.param_constraints[0]["name"] == "enabled"
+    assert commands == [[
+        sys.executable,
+        str(cli.resolve()),
+        "report",
+        "target_fn",
+        "--repo",
+        str(repo),
+        "--file",
+        "src/target.c",
+        "--format",
+        "json",
+    ]]
     assert not list(cli.parent.rglob("__pycache__"))
 
 

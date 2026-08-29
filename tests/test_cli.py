@@ -236,6 +236,34 @@ class TestProgressOutput:
         assert "step=fuzz_started" in output
         assert 'details={"loop": 1, "seconds": 600}' in output
 
+    def test_default_printer_shows_krepo_command(self, capsys) -> None:
+        printer = _event_printer(False)
+        printer(
+            RunEvent(
+                sequence=1,
+                phase=Phase.PREPROCESS,
+                kind="preprocess:krepo_command",
+                payload={
+                    "argv": [
+                        "/usr/bin/python3",
+                        "/tmp/tools/kRepo/main.py",
+                        "report",
+                        "target_fn",
+                        "--repo",
+                        "/tmp/repo with space",
+                        "--format",
+                        "json",
+                    ]
+                },
+            )
+        )
+
+        output = capsys.readouterr().out
+        assert "phase=preprocess" in output
+        assert "step=krepo_command" in output
+        assert "/tmp/tools/kRepo/main.py report target_fn" in output
+        assert "'/tmp/repo with space'" in output
+
 
 class TestResume:
     def test_missing_run(self, workspace_root: Path) -> None:

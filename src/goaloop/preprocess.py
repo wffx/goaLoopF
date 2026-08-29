@@ -212,6 +212,11 @@ def preprocess_request(
             repo_root,
             target_source,
             request.function,
+            on_command=lambda argv: _notify_progress(
+                on_progress,
+                "preprocess:krepo_command",
+                {"argv": argv},
+            ),
         )
     except KRepoError as exc:
         basic_caps.append(Capability(name="krepo_context", available=False, detail=str(exc)))

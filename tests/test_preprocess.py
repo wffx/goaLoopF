@@ -36,12 +36,14 @@ def _write(root: Path, relative: str, content: str) -> Path:
 
 
 def test_ready_preprocess(workspace_root: Path, default_profile: object) -> None:
+    progress: list[tuple[str, dict[str, object]]] = []
     result = preprocess_request(
         workspace_root,
         "run-1",
         _request(workspace_root),
         default_profile,  # type: ignore[arg-type]
         check_runtime=False,
+        on_progress=lambda kind, payload: progress.append((kind, payload)),
     )
     assert result.ready
     assert result.project_name == "safe"
@@ -61,6 +63,10 @@ def test_ready_preprocess(workspace_root: Path, default_profile: object) -> None
     assert json.loads(result.contexts[2].content)[1] == "Outgoing call tree:"
     assert json.loads(result.contexts[3].content)[0]["name"] == "data"
     assert result.candidate_signatures
+    command_payload = next(payload for kind, payload in progress if kind == "preprocess:krepo_command")
+    argv = command_payload["argv"]
+    assert isinstance(argv, list)
+    assert argv[2:4] == ["report", "safe_parse"]
 
 
 def test_krepo_failure_blocks_preprocess(

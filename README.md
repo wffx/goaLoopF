@@ -95,6 +95,7 @@ src/goaloop/
 `GOALOOP_KREPO` 指向其他 kRepo 根目录或新版入口脚本 `main.py`。
 适配不依赖 kRepo 的 `schema_version`；只提取 `source`、上下游调用树和
 `param_constraints` 四项业务内容，并写入 `preprocess.json` 的 `contexts`。
+执行 kRepo 前，Terminal 会输出完整的 `main.py report ... --format json` 命令。
 
 ## 文档
 

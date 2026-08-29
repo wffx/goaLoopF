@@ -6,6 +6,7 @@ import json
 import os
 import subprocess
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TypeGuard
@@ -44,6 +45,7 @@ def read_krepo_report(
     function: str,
     *,
     timeout_seconds: int = KREPO_TIMEOUT_SECONDS,
+    on_command: Callable[[list[str]], None] | None = None,
 ) -> KRepoReport:
     cli = krepo_cli_path(workspace_root)
     if not cli.is_file():
@@ -74,6 +76,8 @@ def read_krepo_report(
         if key in os.environ
     }
     environment["PYTHONDONTWRITEBYTECODE"] = "1"
+    if on_command is not None:
+        on_command(command.copy())
     try:
         completed = subprocess.run(
             command,

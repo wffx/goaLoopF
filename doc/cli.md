@@ -211,7 +211,8 @@ openrouter/xai）+ 手写 OpenAI 兼容网关。自定义网关端点/模型名�
   原调用/引用文件不再整文件进入 prompt，调用关系由两棵去重调用树代替。
 - **kRepo 前置条件**：初始化 `tools/kRepo` 子模块，并用 VS Code C/C++ 扩展为
   被测仓生成 `.vscode/BROWSE.VC.DB`。goaloop 只执行只读统一报告，不调用
-  `source`/`outgoingFuncs` 等写文件命令。缺少工具或数据库时 run 进入 `blocked`。
+  `source`/`outgoingFuncs` 等写文件命令。执行前 Terminal 会输出完整、可复制的
+  kRepo `report` 命令；缺少工具或数据库时 run 进入 `blocked`。
 - **会话不再跨轮累积**：每一轮生成使用独立 session（`<run-id>-gNN`），
   提示词只出现一次；结构化 `latest_feedback` 携带两轮之间的差异。旧实现所有
   轮共用同一 session，第 N 轮的输入 ≈ N 份源码上下文 + 历史回复，第 2~3 轮

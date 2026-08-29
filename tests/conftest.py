@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import re
 import shutil
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -37,6 +38,8 @@ def fake_krepo_report(monkeypatch: pytest.MonkeyPatch) -> None:
         repo_root: Path,
         source_file: Path,
         function: str,
+        *,
+        on_command: Callable[[list[str]], None] | None = None,
     ) -> KRepoReport:
         del workspace_root
         text = source_file.read_text(encoding="utf-8", errors="replace")
@@ -65,6 +68,21 @@ def fake_krepo_report(monkeypatch: pytest.MonkeyPatch) -> None:
         start_line = text.count("\n", 0, source_start) + 1
         end_line = start_line + source.count("\n")
         location = f"{source_file.relative_to(repo_root).as_posix()}:{start_line}-{end_line}"
+        if on_command is not None:
+            on_command(
+                [
+                    "python",
+                    "tools/kRepo/main.py",
+                    "report",
+                    function,
+                    "--repo",
+                    str(repo_root),
+                    "--file",
+                    source_file.relative_to(repo_root).as_posix(),
+                    "--format",
+                    "json",
+                ]
+            )
         return KRepoReport(
             source=source,
             incoming_tree=[f"Target: {function} ({location})", "Incoming call tree:", function],

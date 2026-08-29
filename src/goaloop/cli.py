@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -563,6 +564,7 @@ def _progress_line(kind: str, payload: dict[str, object]) -> str | None:
     messages = {
         "preprocess:started": f"step=started repo={payload.get('repo')} source={payload.get('source')}",
         "preprocess:krepo_started": f"step=krepo_started file={payload.get('file')}",
+        "preprocess:krepo_command": f"step=krepo_command command={_shell_command(payload.get('argv'))}",
         "preprocess:krepo_completed": (
             f"step=krepo_completed incoming_lines={payload.get('incoming_lines')} "
             f"outgoing_lines={payload.get('outgoing_lines')} "
@@ -609,6 +611,12 @@ def _progress_line(kind: str, payload: dict[str, object]) -> str | None:
         "corpus:seed": f"step=seed_corpus copied={payload.get('copied')} ok={payload.get('ok')}",
     }
     return messages.get(kind)
+
+
+def _shell_command(value: object) -> str:
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        return "<unavailable>"
+    return shlex.join(value)
 
 
 def _sdk_importable() -> bool:
