@@ -9,7 +9,7 @@ import pytest
 from pydantic import ValidationError
 
 from goaloop.models import GeneratedArtifactSet, GeneratedFile, Phase, RunEvent, RunState
-from goaloop.storage import ArtifactStore
+from goaloop.storage import ArtifactStore, RunLockedError
 
 from .helpers import make_artifact_payload
 
@@ -74,6 +74,23 @@ def test_state_roundtrip(workspace_root: Path) -> None:
     assert loaded.goal.objective == "o"
 
 
+def test_run_lock_rejects_concurrent_owner(workspace_root: Path) -> None:
+    first = _store(workspace_root, "run-lock-1")
+    second = ArtifactStore(workspace_root, "safe", "run-lock-1")
+    first.acquire_lock()
+    try:
+        with pytest.raises(RunLockedError, match="already active"):
+            second.acquire_lock()
+        metadata = json.loads(first.lock_path.read_text(encoding="utf-8"))
+        assert metadata["pid"] > 0
+        assert metadata["acquired_at"]
+    finally:
+        first.release_lock()
+
+    second.acquire_lock()
+    second.release_lock()
+
+
 def test_materialize_candidate_and_hashes(workspace_root: Path) -> None:
     store = _store(workspace_root)
     artifacts = GeneratedArtifactSet.model_validate(
@@ -103,6 +120,7 @@ def test_materialize_candidate_and_hashes(workspace_root: Path) -> None:
     assert (candidate / "harness_safe.c").is_file()
     hashes = json.loads((candidate.parent / "hashes.json").read_text(encoding="utf-8"))
     assert hashes["harness_safe.c"]
+    assert not list(candidate.parent.glob(".candidate-*"))
 
     # Re-materializing the same loop must fail (never overwrite evidence).
     with pytest.raises(OSError):

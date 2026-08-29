@@ -16,8 +16,12 @@ from goaloop.backend import LocalLinuxBackend
 from goaloop.driver import ScriptedGenerationDriver
 from goaloop.models import (
     FuzzRunRequest,
+    GenerationGoal,
     Language,
+    LoopStage,
     Phase,
+    ProcessResult,
+    RunState,
     TerminalStatus,
     ValidationProfile,
 )
@@ -314,6 +318,130 @@ class TestResume:
         assert state2.terminal_status is TerminalStatus.HARNESS_VERIFIED
         assert state2.generation_loop == 2
 
+    def test_resume_reuses_materialized_candidate_after_execution_interrupt(self, workspace_root: Path) -> None:
+        request = _request(workspace_root, source="repos/safe", function="safe_parse", loops=1)
+        validation = ValidationProfile(name="default", sandbox={"required": False})
+
+        class InterruptingBackend(LocalLinuxBackend):
+            def execute(self, request):
+                raise RuntimeError("execution interrupted")
+
+        first_driver = ScriptedGenerationDriver([_valid_payload("safe", "safe_parse")])
+        interrupted = RunController(
+            workspace_root=workspace_root,
+            request=request,
+            profile=validation,
+            driver=first_driver,
+            backend=InterruptingBackend(validation),
+            run_id="run-resume-materialized",
+        )
+        with pytest.raises(RuntimeError, match="execution interrupted"):
+            interrupted.run()
+        interrupted.close()
+
+        run_dir = _run_dir(workspace_root, "run-resume-materialized")
+        store = ArtifactStore(workspace_root, "safe", "run-resume-materialized")
+        persisted = store.load_state()
+        assert persisted.phase is Phase.HARNESS_EXECUTION
+        assert persisted.active_loop == 1
+        assert persisted.loop_stage is LoopStage.EXECUTING
+        persisted.terminal_status = TerminalStatus.BLOCKED
+        persisted.terminal_phase = Phase.HARNESS_EXECUTION
+        persisted.phase = Phase.CRASH_ANALYSIS_REPORT
+        store.save_state(persisted)
+
+        class CompileFailureBackend(LocalLinuxBackend):
+            def execute(self, request):
+                return ProcessResult(
+                    argv=request.argv,
+                    exit_code=1,
+                    duration_seconds=0.01,
+                    stderr="synthetic compile failure",
+                )
+
+        resumed_driver = ScriptedGenerationDriver([])
+        resumed = RunController(
+            workspace_root=workspace_root,
+            request=request,
+            profile=validation,
+            driver=resumed_driver,
+            backend=CompileFailureBackend(validation),
+            run_id="run-resume-materialized",
+            resume=True,
+        )
+        state = resumed.run()
+        resumed.close()
+
+        assert resumed_driver.calls == 0
+        assert state.generation_loop == 1
+        assert state.active_loop is None
+        assert state.loop_stage is None
+        assert state.terminal_status is TerminalStatus.FAILED
+        assert (run_dir / "iterations" / "loop-01" / "candidate").is_dir()
+        events = (run_dir / "events.jsonl").read_text(encoding="utf-8")
+        assert '"recovery_phase":"harness_execution"' in events
+        assert "execution:checkpoint_resumed" in events
+
+    def test_resume_applies_persisted_execution_without_rerunning_backend(self, workspace_root: Path) -> None:
+        request = _request(workspace_root, source="repos/safe", function="safe_parse", loops=1)
+        validation = ValidationProfile(name="default", sandbox={"required": False})
+
+        class CompileFailureBackend(LocalLinuxBackend):
+            def __init__(self) -> None:
+                super().__init__(validation)
+                self.calls = 0
+
+            def execute(self, request):
+                self.calls += 1
+                return ProcessResult(
+                    argv=request.argv,
+                    exit_code=1,
+                    duration_seconds=0.01,
+                    stderr="synthetic compile failure",
+                )
+
+        class InterruptAfterExecutionController(RunController):
+            def _apply_execution_decision(self, execution, loop):
+                raise RuntimeError("interrupted after execution checkpoint")
+
+        first_backend = CompileFailureBackend()
+        interrupted = InterruptAfterExecutionController(
+            workspace_root=workspace_root,
+            request=request,
+            profile=validation,
+            driver=ScriptedGenerationDriver([_valid_payload("safe", "safe_parse")]),
+            backend=first_backend,
+            run_id="run-resume-executed",
+        )
+        with pytest.raises(RuntimeError, match="after execution checkpoint"):
+            interrupted.run()
+        interrupted.close()
+
+        store = ArtifactStore(workspace_root, "safe", "run-resume-executed")
+        persisted = store.load_state()
+        assert persisted.generation_loop == 0
+        assert persisted.active_loop == 1
+        assert persisted.loop_stage is LoopStage.EXECUTED
+
+        second_backend = CompileFailureBackend()
+        resumed_driver = ScriptedGenerationDriver([])
+        resumed = RunController(
+            workspace_root=workspace_root,
+            request=request,
+            profile=validation,
+            driver=resumed_driver,
+            backend=second_backend,
+            run_id="run-resume-executed",
+            resume=True,
+        )
+        state = resumed.run()
+        resumed.close()
+
+        assert resumed_driver.calls == 0
+        assert second_backend.calls == 0
+        assert state.generation_loop == 1
+        assert state.terminal_status is TerminalStatus.FAILED
+
 
 class TestTerminalPaths:
     def test_needs_input_when_source_missing(self, workspace_root: Path) -> None:
@@ -455,6 +583,61 @@ class TestBuildDirMode:
 
 class TestResumeRecovery:
     """Resume must retry failed/blocked runs, not just re-render the report."""
+
+    @pytest.mark.parametrize(
+        ("terminal_phase", "expected_phase", "recoverable"),
+        [
+            (Phase.PREPROCESS, Phase.PREPROCESS, True),
+            (Phase.HARNESS_GENERATION, Phase.HARNESS_GENERATION, True),
+            (Phase.HARNESS_EXECUTION, Phase.HARNESS_EXECUTION, True),
+            (Phase.CRASH_ANALYSIS_REPORT, Phase.CRASH_ANALYSIS_REPORT, False),
+        ],
+    )
+    def test_terminal_failure_routes_to_recorded_phase(
+        self,
+        workspace_root: Path,
+        terminal_phase: Phase,
+        expected_phase: Phase,
+        recoverable: bool,
+    ) -> None:
+        run_id = f"run-route-{terminal_phase.value}"
+        request = _request(workspace_root, source="repos/safe", function="safe_parse", loops=3)
+        goal = GenerationGoal(
+            run_id=run_id,
+            objective="resume route",
+            target_function="safe_parse",
+            acceptance_criteria=[],
+            max_generation_loops=3,
+        )
+        state = RunState(
+            run_id=run_id,
+            project_name="safe",
+            request=request,
+            phase=Phase.CRASH_ANALYSIS_REPORT,
+            terminal_status=TerminalStatus.BLOCKED,
+            terminal_phase=terminal_phase,
+            goal=goal,
+        )
+        store = ArtifactStore(workspace_root, "safe", run_id)
+        store.initialize()
+        store.save_state(state)
+        controller = RunController(
+            workspace_root=workspace_root,
+            request=request,
+            profile=ValidationProfile(name="default", sandbox={"required": False}),
+            driver=ScriptedGenerationDriver([]),
+            backend=LocalLinuxBackend(ValidationProfile(name="default", sandbox={"required": False})),
+            run_id=run_id,
+            resume=True,
+        )
+
+        controller._load_checkpoint()
+        try:
+            assert controller.state is not None
+            assert controller.state.phase is expected_phase
+            assert (controller.state.terminal_status is None) is recoverable
+        finally:
+            controller.close()
 
     def test_resume_retries_blocked_generation(self, workspace_root: Path) -> None:
         request = _request(workspace_root, source="repos/safe", function="safe_parse", loops=3)

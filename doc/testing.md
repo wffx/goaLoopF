@@ -47,6 +47,9 @@ tests/
 | `test_missing_required_file_fails_after_budget` | max=1 且缺失 README.fuzz.md | `failed`（policy） |
 | `test_harness_crash_returns_to_generation` | loop 1 harness 自身 crash（null deref）→ loop 2 有效 | `harness_verified`（loop 2） |
 | `test_resume_continues_generation` | 中断后 resume → 继续生成 | `harness_verified`（loop 2） |
+| `test_resume_reuses_materialized_candidate_after_execution_interrupt` | 执行中断后复用候选，不重复调用模型 | 同轮执行完成，无目录冲突 |
+| `test_resume_applies_persisted_execution_without_rerunning_backend` | 已写 execution 检查点后中断 | 只重放决策，不重复编译/fuzz |
+| `test_terminal_failure_routes_to_recorded_phase` | blocked/failed 按 `terminal_phase` 恢复 | preprocess/generation/execution 精确路由 |
 | `test_needs_input_when_source_missing` | 源码目录不存在 | `needs_input` |
 | `test_blocked_when_driver_unavailable` | 驱动不可用 | `blocked` |
 

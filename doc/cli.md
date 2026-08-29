@@ -55,6 +55,11 @@ goaloop resume --run-id <id> [--output <dir>] [--verbose] [--debug] [--workspace
 若该 run 使用了 `--output`，这里必须传相同的 `--output`。
 `--debug` 与 `run` 行为相同，会实时显示恢复后发生的 DSH/model trace。
 
+恢复时会对 run 目录获取独占锁；同一 run 已由另一个 `run`/`resume` 进程执行时，
+命令立即失败并显示持锁 PID 和时间。`blocked`/`failed` 根据原失败阶段分别返回
+preprocess、模型生成或候选执行；候选执行使用 `active_loop`/`loop_stage` 检查点，
+已物化的候选不会再次创建。已耗尽生成预算以及报告阶段失败保持终态。
+
 ### `goaloop status` — 查看 run 状态
 
 ```bash

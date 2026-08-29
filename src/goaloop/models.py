@@ -31,6 +31,13 @@ class Phase(StrEnum):
     CRASH_ANALYSIS_REPORT = "crash_analysis_report"
 
 
+class LoopStage(StrEnum):
+    MODEL_GENERATION = "model_generation"
+    MATERIALIZED = "materialized"
+    EXECUTING = "executing"
+    EXECUTED = "executed"
+
+
 class TerminalStatus(StrEnum):
     HARNESS_VERIFIED = "harness_verified"
     BUG_REPRODUCED = "bug_reproduced"
@@ -548,7 +555,10 @@ class RunState(Contract):
     request: FuzzRunRequest
     phase: Phase = Phase.PREPROCESS
     generation_loop: int = 0
+    active_loop: int | None = None
+    loop_stage: LoopStage | None = None
     terminal_status: TerminalStatus | None = None
+    terminal_phase: Phase | None = None
     goal: GenerationGoal
     last_execution_path: str | None = None
     validation_result_path: str | None = None

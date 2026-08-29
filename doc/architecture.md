@@ -131,14 +131,20 @@ FuzzRunRequest ──► preprocess ──► kRepo report（只读 BROWSE.VC.DB
 
 ## 断点恢复（resume）
 
-每个阶段转换和关键事件写入 `events.jsonl`（append-only）和 `state.json`（RunState 全量）。`goaloop resume --run-id <id>` 从磁盘加载：
-- `state.json` → 当前 phase、generation_loop、terminal_status
+每个阶段转换和关键事件写入 `events.jsonl`（append-only）和 `state.json`（RunState 全量）。`goaloop resume --run-id <id>` 先获取 run 目录的非阻塞独占锁，再从磁盘加载：
+- `state.json` → 当前 phase、generation_loop、active_loop、loop_stage、terminal_status、terminal_phase
 - `preprocess.json` → 跳过预处理
 - `goal.json` → 恢复目标与反馈
 - `executions/loop-*/execution.json` → 最后执行证据
 - `crash-analysis.json`（如存在）→ 跳过已完成的 crash 分析
 
-恢复后从当前 phase 继续状态机循环。已完成的执行证据永不重复覆盖。
+候选轮次按 `model_generation → materialized → executing → executed` 保存子阶段检查点：
+
+- `materialized`/`executing`：读取原 `response.json` 和 `candidate/`，不再次调用模型或创建目录；未完成的编译/fuzz 可以安全重跑。
+- `executed`：读取 `execution.json`，只重新应用确定性决策。
+- `environment_error`：不消耗 generation loop，修复环境后用同一候选重新执行。
+
+`blocked`/`failed` 根据 `terminal_phase` 回到 preprocess、harness generation 或 harness execution；报告阶段失败、不可恢复终态和已耗尽轮次预算的失败保持终态。候选目录通过临时目录完整写入后原子 rename，避免半成品被当作有效候选。锁在 `RunController.close()` 释放，锁文件保留最后一次持有者的 PID/时间用于诊断。
 
 ## 安全边界
 

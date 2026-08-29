@@ -14,6 +14,7 @@ from ..models import (
     GeneratedArtifactSet,
     GenerationFeedback,
     HarnessExecutionResult,
+    LoopStage,
     Phase,
     ProcessResult,
     RunContext,
@@ -57,6 +58,15 @@ class GenerationMixin:
             )
             return
 
+        if self._recover_durable_loop(loop):
+            if self.state.terminal_status is None:
+                self._resume_execution_step()
+            return
+
+        self.state.active_loop = loop
+        self.state.loop_stage = LoopStage.MODEL_GENERATION
+        self._save_checkpoint()
+
         self._event(
             "generation:model_started",
             {"loop": loop, "max_loops": self.request.max_generation_loops},
@@ -99,17 +109,62 @@ class GenerationMixin:
         self._event("generation:validation_completed", {"loop": loop})
         self._execute_candidate(artifacts, loop)
 
-    def _execute_candidate(self: ControllerState, artifacts: GeneratedArtifactSet, loop: int) -> None:
+    def _resume_execution_step(self: ControllerState) -> None:
+        assert self.state is not None and self.store is not None
+        loop = self.state.active_loop
+        if loop is None:
+            self._terminate(TerminalStatus.FAILED, "execution checkpoint has no active loop")
+            return
+        execution_path = self._execution_path(loop)
+        if self.state.loop_stage is LoopStage.EXECUTED or (
+            self.state.loop_stage is LoopStage.EXECUTING and execution_path.is_file()
+        ):
+            if not execution_path.is_file():
+                self._terminate(TerminalStatus.FAILED, f"execution checkpoint is missing {execution_path.name}")
+                return
+            execution = HarnessExecutionResult.model_validate_json(execution_path.read_text(encoding="utf-8"))
+            self.last_execution = execution
+            self._event("execution:checkpoint_resumed", {"loop": loop, "stage": LoopStage.EXECUTED.value})
+            self._apply_execution_decision(execution, loop)
+            return
+
+        response_path = self._response_path(loop)
+        candidate_dir = self._candidate_dir(loop)
+        if not response_path.is_file() or not candidate_dir.is_dir():
+            self._terminate(
+                TerminalStatus.FAILED,
+                f"execution checkpoint for loop {loop} is incomplete; candidate or response is missing",
+            )
+            return
+        artifacts = GeneratedArtifactSet.model_validate_json(response_path.read_text(encoding="utf-8"))
+        self._event(
+            "execution:checkpoint_resumed",
+            {"loop": loop, "stage": (self.state.loop_stage or LoopStage.MATERIALIZED).value},
+        )
+        self._execute_candidate(artifacts, loop, materialized=True)
+
+    def _execute_candidate(
+        self: ControllerState,
+        artifacts: GeneratedArtifactSet,
+        loop: int,
+        *,
+        materialized: bool = False,
+    ) -> None:
         assert (
             self.state is not None and self.store is not None and self.preprocess is not None and self.goal is not None
         )
-        self._event(
-            "phase:enter",
-            {"phase": Phase.HARNESS_EXECUTION.value},
-            phase=Phase.HARNESS_EXECUTION,
-        )
-        candidate_dir = self.store.materialize_candidate(artifacts)
-        self._event("execution:materialized", {"loop": loop}, phase=Phase.HARNESS_EXECUTION)
+        if materialized:
+            candidate_dir = self._candidate_dir(loop)
+        else:
+            candidate_dir = self.store.materialize_candidate(artifacts)
+            self.state.active_loop = loop
+            self.state.loop_stage = LoopStage.MATERIALIZED
+        if self.state.phase is not Phase.HARNESS_EXECUTION:
+            self._enter_phase(Phase.HARNESS_EXECUTION)
+        if not materialized:
+            self._event("execution:materialized", {"loop": loop}, phase=Phase.HARNESS_EXECUTION)
+        self.state.loop_stage = LoopStage.EXECUTING
+        self._save_checkpoint()
         binary_name = artifacts.endpoint_plan.build.binary_name
         self._loop_hashes[str(loop)] = self._candidate_hashes(candidate_dir.parent)
         context = RunContext(
@@ -160,9 +215,14 @@ class GenerationMixin:
             coverage_valid=coverage_valid,
             crash_artifact=self._first_crash_artifact(loop),
         )
-        self._record_loop_consumed(loop)
         self.last_execution = execution
         self._persist_execution(execution)
+        self.state.loop_stage = LoopStage.EXECUTED
+        self._save_checkpoint()
+        self._apply_execution_decision(execution, loop)
+
+    def _apply_execution_decision(self: ControllerState, execution: HarnessExecutionResult, loop: int) -> None:
+        assert self.state is not None and self.goal is not None and self.store is not None
         decision = decide_generation(execution, self.profile.coverage)
         self._event(
             "execution:decided",
@@ -189,31 +249,70 @@ class GenerationMixin:
         self.goal.latest_feedback = decision.feedback
         if decision.completes_goal:
             self.goal.completed = True
-        self.state.generation_loop = loop
-        self._save_checkpoint()
 
         if decision.disposition is ExecutionDisposition.ACCEPTED:
+            self._complete_loop(loop)
             self._terminate(TerminalStatus.HARNESS_VERIFIED, decision.reason)
             self._enter_phase(Phase.CRASH_ANALYSIS_REPORT)
             return
         if decision.disposition is ExecutionDisposition.NEEDS_REGENERATION:
+            self._complete_loop(loop)
             if loop >= self.request.max_generation_loops:
                 self._terminate(
                     TerminalStatus.FAILED,
                     f"generation loop budget exhausted after {loop} loop(s): {decision.reason}",
                 )
             else:
-                self._event(
-                    "phase:enter",
-                    {"phase": Phase.HARNESS_GENERATION.value},
-                    phase=Phase.HARNESS_GENERATION,
-                )
+                self._enter_phase(Phase.HARNESS_GENERATION)
             return
         if decision.disposition is ExecutionDisposition.ENVIRONMENT_ERROR:
+            self.state.loop_stage = LoopStage.MATERIALIZED
             self._terminate(TerminalStatus.BLOCKED, decision.reason)
             return
         # crash_candidate
+        self._complete_loop(loop)
         self._enter_phase(Phase.CRASH_ANALYSIS_REPORT)
+
+    def _recover_durable_loop(self: ControllerState, loop: int) -> bool:
+        assert self.state is not None and self.store is not None
+        if self.state.active_loop is not None and self.state.active_loop != loop:
+            self._terminate(
+                TerminalStatus.FAILED,
+                f"active loop {self.state.active_loop} conflicts with expected loop {loop}",
+            )
+            return True
+        execution_path = self._execution_path(loop)
+        candidate_dir = self._candidate_dir(loop)
+        response_path = self._response_path(loop)
+        if execution_path.is_file():
+            self.state.active_loop = loop
+            self.state.loop_stage = LoopStage.EXECUTED
+        elif candidate_dir.is_dir() and response_path.is_file():
+            self.state.active_loop = loop
+            self.state.loop_stage = LoopStage.MATERIALIZED
+        elif self.state.loop_stage not in (LoopStage.MATERIALIZED, LoopStage.EXECUTING, LoopStage.EXECUTED):
+            return False
+        self.state.phase = Phase.HARNESS_EXECUTION
+        self._save_checkpoint()
+        return True
+
+    def _candidate_dir(self: ControllerState, loop: int) -> Path:
+        assert self.store is not None
+        return self.store.iterations_dir / f"loop-{loop:02d}" / "candidate"
+
+    def _response_path(self: ControllerState, loop: int) -> Path:
+        assert self.store is not None
+        return self.store.iterations_dir / f"loop-{loop:02d}" / "response.json"
+
+    def _execution_path(self: ControllerState, loop: int) -> Path:
+        assert self.store is not None
+        return self.store.run_dir / "executions" / f"loop-{loop:02d}" / "execution.json"
+
+    def _complete_loop(self: ControllerState, loop: int) -> None:
+        assert self.state is not None
+        self.state.generation_loop = loop
+        self.state.active_loop = None
+        self.state.loop_stage = None
 
     def _cmake_build_if_requested(
         self: ControllerState,
@@ -381,7 +480,7 @@ class GenerationMixin:
     def _record_loop_consumed(self: ControllerState, loop: int) -> None:
         assert self.state is not None and self.goal is not None
         self.goal.current_loop = loop
-        self.state.generation_loop = loop
+        self._complete_loop(loop)
         self._save_checkpoint()
 
     def _first_crash_artifact(self: ControllerState, loop: int) -> str | None:

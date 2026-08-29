@@ -19,7 +19,7 @@ from .krepo import krepo_cli_path
 from .models import Capability, FuzzRunRequest, Language, ModelProfile, RunEvent, RunState
 from .redaction import redact
 from .report import REPORT_FILENAME, VALIDATION_FILENAME
-from .storage import ArtifactStore, create_run_id
+from .storage import ArtifactStore, RunLockedError, create_run_id
 from .workflow import RunController
 
 app = typer.Typer(
@@ -208,7 +208,11 @@ def resume(
     )
     typer.echo(f"[goaloop] resuming {run_id} from phase {state.phase.value}")
     try:
-        state = controller.run()
+        try:
+            state = controller.run()
+        except RunLockedError as exc:
+            typer.echo(f"[goaloop] resume rejected: {exc}", err=True)
+            raise typer.Exit(1) from exc
     finally:
         controller.close()
     _echo_state(state, run_dir=run_dir)
@@ -604,6 +608,9 @@ def _progress_line(kind: str, payload: dict[str, object]) -> str | None:
         "generation:model_invalid": f"step=model_output_invalid{loop_part}",
         "generation:policy_rejected": f"step=artifact_policy_rejected{loop_part}",
         "execution:materialized": f"step=candidate_materialized{loop_part}",
+        "execution:checkpoint_resumed": (
+            f"step=checkpoint_resumed{loop_part} stage={payload.get('stage')}"
+        ),
         "execution:cmake_configure_started": f"step=cmake_configure_started{loop_part}",
         "execution:cmake_configure": f"step=cmake_configure_completed{loop_part} exit={payload.get('exit_code')}",
         "execution:cmake_build_started": f"step=cmake_build_started{loop_part}",

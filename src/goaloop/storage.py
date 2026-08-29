@@ -2,16 +2,23 @@
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import os
+import shutil
 import tempfile
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, TextIO
 
 from pydantic import BaseModel
 
 from .models import GeneratedArtifactSet, RunEvent, RunState
+
+
+class RunLockedError(RuntimeError):
+    """Another process currently owns the run's exclusive workflow lock."""
 
 
 class ArtifactStore:
@@ -37,6 +44,8 @@ class ArtifactStore:
         self.private_session_dir = self.workspace_root / ".private-sessions" / run_id
         self.state_path = self.run_dir / "state.json"
         self.events_path = self.run_dir / "events.jsonl"
+        self.lock_path = self.run_dir / ".run.lock"
+        self._lock_handle: TextIO | None = None
 
     def initialize(self) -> None:
         for path in (
@@ -55,6 +64,38 @@ class ArtifactStore:
     def load_state(self) -> RunState:
         return RunState.model_validate_json(self.state_path.read_text(encoding="utf-8"))
 
+    def acquire_lock(self) -> None:
+        if self._lock_handle is not None:
+            return
+        self.run_dir.mkdir(parents=True, exist_ok=True)
+        handle = self.lock_path.open("a+", encoding="utf-8")
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            handle.seek(0)
+            holder = handle.read().strip() or "holder metadata unavailable"
+            handle.close()
+            raise RunLockedError(f"run {self.run_dir.name!r} is already active ({holder})") from exc
+        metadata = {
+            "pid": os.getpid(),
+            "acquired_at": datetime.now(UTC).isoformat(),
+        }
+        handle.seek(0)
+        handle.truncate()
+        handle.write(json.dumps(metadata, ensure_ascii=False))
+        handle.flush()
+        os.fsync(handle.fileno())
+        self._lock_handle = handle
+
+    def release_lock(self) -> None:
+        if self._lock_handle is None:
+            return
+        try:
+            fcntl.flock(self._lock_handle.fileno(), fcntl.LOCK_UN)
+        finally:
+            self._lock_handle.close()
+            self._lock_handle = None
+
     def append_event(self, event: RunEvent) -> None:
         self.events_path.parent.mkdir(parents=True, exist_ok=True)
         serialized = event.model_dump_json() + "\n"
@@ -70,17 +111,26 @@ class ArtifactStore:
             return sum(1 for line in handle if line.strip()) + 1
 
     def materialize_candidate(self, artifacts: GeneratedArtifactSet) -> Path:
-        candidate_dir = self.iterations_dir / f"loop-{artifacts.generation_loop:02d}" / "candidate"
-        candidate_dir.mkdir(parents=True, exist_ok=False)
-        for generated in artifacts.files:
-            destination = self._contained(candidate_dir, generated.path)
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            self.write_text(destination, generated.content)
-            if destination.name == "build.sh":
-                destination.chmod(0o600)
-        self.write_json(candidate_dir.parent / "response.json", artifacts)
-        hashes = self.hash_tree(candidate_dir)
-        self.write_json(candidate_dir.parent / "hashes.json", hashes)
+        iteration_dir = self.iterations_dir / f"loop-{artifacts.generation_loop:02d}"
+        candidate_dir = iteration_dir / "candidate"
+        iteration_dir.mkdir(parents=True, exist_ok=True)
+        if candidate_dir.exists():
+            raise FileExistsError(f"candidate already exists: {candidate_dir}")
+        temporary = Path(tempfile.mkdtemp(prefix=".candidate-", dir=iteration_dir))
+        try:
+            for generated in artifacts.files:
+                destination = self._contained(temporary, generated.path)
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                self.write_text(destination, generated.content)
+                if destination.name == "build.sh":
+                    destination.chmod(0o600)
+            hashes = self.hash_tree(temporary)
+            self.write_json(iteration_dir / "response.json", artifacts)
+            self.write_json(iteration_dir / "hashes.json", hashes)
+            temporary.rename(candidate_dir)
+        finally:
+            if temporary.exists():
+                shutil.rmtree(temporary)
         return candidate_dir
 
     def write_json(self, path: Path, value: BaseModel | dict[str, Any] | list[Any]) -> None:

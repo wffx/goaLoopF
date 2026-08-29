@@ -98,6 +98,8 @@ class RunController(GenerationMixin, ReportMixin):
                 self._preprocess_step()
             elif phase is Phase.HARNESS_GENERATION:
                 self._generation_step()
+            elif phase is Phase.HARNESS_EXECUTION:
+                self._resume_execution_step()
             elif phase is Phase.CRASH_ANALYSIS_REPORT:
                 self._report_step()
                 if self.state.phase is Phase.HARNESS_GENERATION:
@@ -116,7 +118,11 @@ class RunController(GenerationMixin, ReportMixin):
         return self.state  # type: ignore[return-value]
 
     def close(self) -> None:
-        self.driver.close()
+        try:
+            self.driver.close()
+        finally:
+            if self.store is not None:
+                self.store.release_lock()
 
     # -- lifecycle helpers ---------------------------------------------------
 
@@ -158,7 +164,9 @@ class RunController(GenerationMixin, ReportMixin):
         run_dir = matches[0]
         project_name = run_dir.parent.parent.name
         self.store = ArtifactStore(self.workspace_root, project_name, run_id, output_root=self.output_root)
+        self.store.acquire_lock()
         self.state = self.store.load_state()
+        self.request = self.state.request
         self.goal = self.state.goal
         preprocess_path = run_dir / PREPROCESS_FILENAME
         if preprocess_path.is_file():
@@ -177,19 +185,17 @@ class RunController(GenerationMixin, ReportMixin):
         self._event("phase:resume", {"phase": self.state.phase.value})
 
     def _recover_terminal_run(self) -> None:
-        """Let resume retry a failed/blocked run instead of only re-rendering.
+        """Retry recoverable failed/blocked runs from their recorded phase.
 
-        A FAILED/BLOCKED terminal (e.g. a transient model endpoint error, or an
-        SDK failure) is often worth retrying after the environment is fixed;
-        resume clears the terminal marker and returns to the generation phase.
-        Already-executed loops are never re-run: evidence is preserved and the
-        next generation continues at ``generation_loop + 1``.
+        ``terminal_phase`` distinguishes preprocess, model generation, and
+        candidate execution failures. Execution resumes from the active loop's
+        durable sub-stage; environment failures therefore reuse the candidate
+        instead of creating the same loop directory again.
 
         Terminal statuses that are real outcomes are NOT recovered:
         harness_verified, bug_reproduced, needs_review (they completed), and
-        needs_input (the request itself is wrong). Budget-exhausted FAILED runs
-        are also kept terminal; the generation step guards against exceeding
-        the budget.
+        needs_input (the request itself is wrong), and report-phase failures.
+        Budget-exhausted FAILED runs are also kept terminal.
         """
         if self.state is None or self.state.terminal_status is None:
             return
@@ -199,11 +205,19 @@ class RunController(GenerationMixin, ReportMixin):
         if status is TerminalStatus.FAILED and self.state.generation_loop >= self.request.max_generation_loops:
             return  # budget already exhausted; nothing left to retry
         reason = self._terminal_reason() or status.value
+        recovery_phase = self.state.terminal_phase or Phase.HARNESS_GENERATION
+        if recovery_phase is Phase.CRASH_ANALYSIS_REPORT:
+            return
         self.state.terminal_status = None
         if self.goal is not None:
             self.goal.completed = False
-        self.state.phase = Phase.HARNESS_GENERATION
-        self._event("run:resumed", {"from_status": status.value, "reason": reason})
+        self.state.phase = recovery_phase
+        self.state.terminal_phase = None
+        self._event(
+            "run:resumed",
+            {"from_status": status.value, "reason": reason, "recovery_phase": recovery_phase.value},
+        )
+        self._save_checkpoint()
 
     def _save_checkpoint(self) -> None:
         if self.state is None or self.store is None:
@@ -248,6 +262,7 @@ class RunController(GenerationMixin, ReportMixin):
 
     def _terminate(self, status: TerminalStatus, reason: str) -> None:
         assert self.state is not None
+        self.state.terminal_phase = self.state.phase
         self.state.terminal_status = status
         self._event("run:terminal", {"status": status.value, "reason": reason})
         self._save_checkpoint()
@@ -294,12 +309,17 @@ class RunController(GenerationMixin, ReportMixin):
         )
         self.preprocess = preprocess
         self.state.project_name = preprocess.project_name
-        self.store = ArtifactStore(
+        target_store = ArtifactStore(
             self.workspace_root,
             preprocess.project_name,
             self.state.run_id,
             output_root=self.output_root,
         )
+        if self.store is None or self.store.run_dir != target_store.run_dir:
+            if self.store is not None:
+                self.store.release_lock()
+            target_store.acquire_lock()
+            self.store = target_store
         self.store.initialize()
         self._seed_corpus()
         self._persist_preprocess()

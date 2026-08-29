@@ -303,6 +303,20 @@ class TestResume:
         assert result.exit_code != 0
         assert "not found" in result.output
 
+    def test_rejects_concurrent_resume(self, workspace_root: Path) -> None:
+        run_id = "run-cli-locked"
+        _make_run(workspace_root, run_id)
+        owner = ArtifactStore(workspace_root, "safe", run_id)
+        owner.acquire_lock()
+        try:
+            result = runner.invoke(app, ["resume", "--run-id", run_id, "--workspace", str(workspace_root)])
+        finally:
+            owner.release_lock()
+
+        assert result.exit_code == 1
+        assert "resume rejected" in result.output
+        assert "already active" in result.output
+
 
 class TestOutputDir:
     def test_run_with_output_relocates_products(self, workspace_root: Path, tmp_path: Path) -> None:

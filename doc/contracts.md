@@ -57,7 +57,7 @@
 
 | 模型 | 用途 | 关键约束 |
 |---|---|---|
-| `RunState` | 全量检查点 | `phase` 四阶段枚举；`generation_loop` 计数；`terminal_status` 终态；`goal` 嵌入的 `GenerationGoal` |
+| `RunState` | 全量检查点 | `phase` 四阶段枚举；`generation_loop` 为已完成轮次；`active_loop`/`loop_stage` 标记当前候选子阶段；`terminal_phase` 记录失败发生阶段；`terminal_status` 为终态；`goal` 嵌入 `GenerationGoal` |
 | `RunEvent` | 追加式事件 | `sequence` 自增；`phase` 当前阶段；`kind` 事件类型；`payload` 任意 JSON |
 | `RunContext` | 后端执行上下文 | `run_dir`/`source_root`/`candidate_dir`/`binary_name` |
 | `ExecutionLease` | 命令白名单授权 | `allowed_executables`（绝对路径）、`allowed_dirs`（目录级授权）；`commands_used` 计数；`authorize(argv)` 校验 |
