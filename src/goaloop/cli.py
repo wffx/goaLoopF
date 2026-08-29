@@ -564,8 +564,8 @@ def _progress_line(kind: str, payload: dict[str, object]) -> str | None:
         "preprocess:started": f"step=started repo={payload.get('repo')} source={payload.get('source')}",
         "preprocess:krepo_started": f"step=krepo_started file={payload.get('file')}",
         "preprocess:krepo_completed": (
-            f"step=krepo_completed incoming={payload.get('incoming_functions')} "
-            f"outgoing={payload.get('outgoing_functions')}"
+            f"step=krepo_completed incoming_lines={payload.get('incoming_lines')} "
+            f"outgoing_lines={payload.get('outgoing_lines')}"
         ),
         "preprocess:krepo_failed": f"step=krepo_failed reason={payload.get('reason')}",
         "preprocess:done": f"step=completed ready={payload.get('ready')} duration={payload.get('duration')}s",

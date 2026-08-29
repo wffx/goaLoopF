@@ -203,7 +203,7 @@ openrouter/xai）+ 手写 OpenAI 兼容网关。自定义网关端点/模型名�
 - **函数级上下文替代整文件和调用方文件**：
 
   1. kRepo `report --format json` 返回的目标函数原始实现片段，最多占预算的 1/2；
-  2. kRepo 生成的 `incoming_tree` 和 `outgoing_tree`，各最多占预算的 1/4；
+  2. kRepo report schema v2 生成的 `incoming_tree` 和 `outgoing_tree` 字符串数组，各最多占预算的 1/4；
   3. 定义文件的 quoted-include 传递闭包和同 basename 头，每文件最多 32 KiB；
   4. 构建文件每文件最多 16 KiB；`--build-dir` 模式仍不注入构建文件。
 

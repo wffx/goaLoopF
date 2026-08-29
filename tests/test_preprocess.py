@@ -56,8 +56,8 @@ def test_ready_preprocess(workspace_root: Path, default_profile: object) -> None
     target = result.contexts[0]
     assert target.content.startswith("int safe_parse")
     assert "#include" not in target.content
-    assert json.loads(result.contexts[1].content)["functions"]
-    assert json.loads(result.contexts[2].content)["functions"]
+    assert json.loads(result.contexts[1].content)[1] == "Incoming call tree:"
+    assert json.loads(result.contexts[2].content)[1] == "Outgoing call tree:"
     assert result.candidate_signatures
 
 

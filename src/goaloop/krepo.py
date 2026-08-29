@@ -4,15 +4,18 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TypeGuard
 
 from .redaction import redact
 
 KREPO_TIMEOUT_SECONDS = 300
+KREPO_REPORT_SCHEMA_VERSION = 2
+KREPO_TARGET_LOCATION_PATTERN = re.compile(r"^(?P<file>.+):(?P<start>\d+|\?)-(?P<end>\d+|\?)$")
 
 
 class KRepoError(RuntimeError):
@@ -22,8 +25,8 @@ class KRepoError(RuntimeError):
 @dataclass(frozen=True)
 class KRepoReport:
     source: str
-    incoming_tree: dict[str, Any]
-    outgoing_tree: dict[str, Any]
+    incoming_tree: list[str]
+    outgoing_tree: list[str]
     selected_file: str
     start_line: int | None
     end_line: int | None
@@ -100,18 +103,24 @@ def read_krepo_report(
         raise KRepoError(f"kRepo report was not valid JSON: {exc}; preview={preview!r}") from exc
     if not isinstance(payload, dict):
         raise KRepoError("kRepo report root is not a JSON object")
+    if payload.get("schema_version") != KREPO_REPORT_SCHEMA_VERSION:
+        raise KRepoError(f"kRepo report schema_version must be {KREPO_REPORT_SCHEMA_VERSION}")
 
     source = payload.get("source")
     incoming_tree = payload.get("incoming_tree")
     outgoing_tree = payload.get("outgoing_tree")
-    selected = payload.get("selected")
+    target = payload.get("target")
     if not isinstance(source, str) or not source.strip():
         raise KRepoError("kRepo report has no target function source")
-    if not isinstance(incoming_tree, dict) or not isinstance(outgoing_tree, dict):
-        raise KRepoError("kRepo report is missing incoming_tree or outgoing_tree")
-    if not isinstance(selected, dict):
-        raise KRepoError("kRepo report is missing selected function metadata")
-    selected_file = str(selected.get("file", file_filter))
+    if not _is_string_list(incoming_tree) or not _is_string_list(outgoing_tree):
+        raise KRepoError("kRepo report incoming_tree and outgoing_tree must be non-empty string arrays")
+    if not isinstance(target, dict):
+        raise KRepoError("kRepo report is missing target metadata")
+    location = target.get("location")
+    location_match = KREPO_TARGET_LOCATION_PATTERN.fullmatch(location) if isinstance(location, str) else None
+    if location_match is None:
+        raise KRepoError("kRepo report target.location is invalid")
+    selected_file = location_match.group("file")
     normalized_selected = selected_file.replace("\\", "/").lower()
     if not normalized_selected.endswith(file_filter.lower()):
         raise KRepoError(
@@ -122,10 +131,14 @@ def read_krepo_report(
         incoming_tree=incoming_tree,
         outgoing_tree=outgoing_tree,
         selected_file=selected_file,
-        start_line=_optional_int(selected.get("start_line")),
-        end_line=_optional_int(selected.get("end_line")),
+        start_line=_optional_line(location_match.group("start")),
+        end_line=_optional_line(location_match.group("end")),
     )
 
 
-def _optional_int(value: object) -> int | None:
-    return value if isinstance(value, int) and value >= 1 else None
+def _is_string_list(value: object) -> TypeGuard[list[str]]:
+    return isinstance(value, list) and bool(value) and all(isinstance(item, str) for item in value)
+
+
+def _optional_line(value: str) -> int | None:
+    return int(value) if value.isdigit() and int(value) >= 1 else None

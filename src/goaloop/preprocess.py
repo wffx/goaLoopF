@@ -230,8 +230,8 @@ def preprocess_request(
         "preprocess:krepo_completed",
         {
             "source_chars": len(krepo_report.source),
-            "incoming_functions": _tree_function_count(krepo_report.incoming_tree),
-            "outgoing_functions": _tree_function_count(krepo_report.outgoing_tree),
+            "incoming_lines": len(krepo_report.incoming_tree),
+            "outgoing_lines": len(krepo_report.outgoing_tree),
         },
     )
     # The source-context budget comes from the request (CLI --max-context-kb);
@@ -461,11 +461,6 @@ def _notify_progress(
 ) -> None:
     if callback is not None:
         callback(kind, payload)
-
-
-def _tree_function_count(tree: dict[str, Any]) -> int:
-    functions = tree.get("functions")
-    return len(functions) if isinstance(functions, list) else 0
 
 
 def _definition_files(matches: list[Path], symbol: str | None) -> tuple[list[Path], list[Path]]:

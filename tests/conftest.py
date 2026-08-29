@@ -38,7 +38,7 @@ def fake_krepo_report(monkeypatch: pytest.MonkeyPatch) -> None:
         source_file: Path,
         function: str,
     ) -> KRepoReport:
-        del workspace_root, repo_root
+        del workspace_root
         text = source_file.read_text(encoding="utf-8", errors="replace")
         match = None
         for candidate in re.finditer(rf"\b{re.escape(function)}\s*\(", text):
@@ -64,18 +64,11 @@ def fake_krepo_report(monkeypatch: pytest.MonkeyPatch) -> None:
         source = text[source_start:body_end]
         start_line = text.count("\n", 0, source_start) + 1
         end_line = start_line + source.count("\n")
-        selected = {
-            "id": 1,
-            "name": function,
-            "file": str(source_file),
-            "start_line": start_line,
-            "end_line": end_line,
-        }
-        tree = {"selected": selected, "functions": [selected], "edges": {}, "limits": {"truncated": False}}
+        location = f"{source_file.relative_to(repo_root).as_posix()}:{start_line}-{end_line}"
         return KRepoReport(
             source=source,
-            incoming_tree={**tree, "call_sites": []},
-            outgoing_tree={**tree, "skipped_auxiliary_calls": []},
+            incoming_tree=[f"Target: {function} ({location})", "Incoming call tree:", function],
+            outgoing_tree=[f"Target: {function} ({location})", "Outgoing call tree:", function],
             selected_file=str(source_file),
             start_line=start_line,
             end_line=end_line,
