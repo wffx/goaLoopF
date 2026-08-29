@@ -36,6 +36,7 @@ MAX_TARGET_FILE_BYTES = 64 * 1024
 MAX_DEPENDENCY_FILE_BYTES = 32 * 1024
 MAX_BUILD_FILE_BYTES = 16 * 1024
 MAX_CALL_TREE_BYTES = 16 * 1024
+MAX_PARAM_CONSTRAINT_BYTES = 16 * 1024
 # Fallback total context budget when the caller does not pass one; the
 # controller always derives it from FuzzRunRequest.max_context_kb.
 MAX_CONTEXT_TOTAL_BYTES = 256 * 1024
@@ -232,6 +233,7 @@ def preprocess_request(
             "source_chars": len(krepo_report.source),
             "incoming_lines": len(krepo_report.incoming_tree),
             "outgoing_lines": len(krepo_report.outgoing_tree),
+            "param_constraints": len(krepo_report.param_constraints),
         },
     )
     # The source-context budget comes from the request (CLI --max-context-kb);
@@ -364,12 +366,13 @@ def _collect_context(
     max_context_bytes: int | None = None,
     include_build_files: bool = True,
 ) -> list[SourceContext]:
-    """Collect the kRepo target snippet/trees, then related headers and build files."""
+    """Collect the kRepo target data, then related headers and build files."""
     budget = MAX_CONTEXT_TOTAL_BYTES if max_context_bytes is None else max_context_bytes
     result: list[SourceContext] = []
     total = 0
     target_cap = min(MAX_TARGET_FILE_BYTES, max(1, budget // 2))
-    tree_cap = min(MAX_CALL_TREE_BYTES, max(1, budget // 4))
+    tree_cap = min(MAX_CALL_TREE_BYTES, max(1, budget // 5))
+    param_cap = min(MAX_PARAM_CONSTRAINT_BYTES, max(1, budget // 10))
     target_file = definitions[0]
     total += _append_text_context(
         result,
@@ -393,6 +396,13 @@ def _collect_context(
         path="analysis/outgoingTree.json",
         content=json.dumps(krepo_report.outgoing_tree, ensure_ascii=False, indent=2, sort_keys=True),
         cap=min(tree_cap, budget - total),
+    )
+    total += _append_text_context(
+        result,
+        kind="param_constraints",
+        path="analysis/param_constraints.json",
+        content=json.dumps(krepo_report.param_constraints, ensure_ascii=False, indent=2, sort_keys=True),
+        cap=min(param_cap, budget - total),
     )
 
     dependencies = _include_closure(root, definitions, files) + _same_basename_headers(definitions, files)

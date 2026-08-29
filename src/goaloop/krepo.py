@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -14,8 +13,6 @@ from typing import TypeGuard
 from .redaction import redact
 
 KREPO_TIMEOUT_SECONDS = 300
-KREPO_REPORT_SCHEMA_VERSION = 2
-KREPO_TARGET_LOCATION_PATTERN = re.compile(r"^(?P<file>.+):(?P<start>\d+|\?)-(?P<end>\d+|\?)$")
 
 
 class KRepoError(RuntimeError):
@@ -27,7 +24,7 @@ class KRepoReport:
     source: str
     incoming_tree: list[str]
     outgoing_tree: list[str]
-    selected_file: str
+    param_constraints: list[dict[str, object]]
     start_line: int | None
     end_line: int | None
 
@@ -103,36 +100,25 @@ def read_krepo_report(
         raise KRepoError(f"kRepo report was not valid JSON: {exc}; preview={preview!r}") from exc
     if not isinstance(payload, dict):
         raise KRepoError("kRepo report root is not a JSON object")
-    if payload.get("schema_version") != KREPO_REPORT_SCHEMA_VERSION:
-        raise KRepoError(f"kRepo report schema_version must be {KREPO_REPORT_SCHEMA_VERSION}")
 
     source = payload.get("source")
-    incoming_tree = payload.get("incoming_tree")
-    outgoing_tree = payload.get("outgoing_tree")
-    target = payload.get("target")
+    incoming_tree = _tree_value(payload, "incoming_tree", "incomingTree")
+    outgoing_tree = _tree_value(payload, "outgoing_tree", "outgoingTree")
+    param_constraints = payload.get("param_constraints")
     if not isinstance(source, str) or not source.strip():
         raise KRepoError("kRepo report has no target function source")
     if not _is_string_list(incoming_tree) or not _is_string_list(outgoing_tree):
         raise KRepoError("kRepo report incoming_tree and outgoing_tree must be non-empty string arrays")
-    if not isinstance(target, dict):
-        raise KRepoError("kRepo report is missing target metadata")
-    location = target.get("location")
-    location_match = KREPO_TARGET_LOCATION_PATTERN.fullmatch(location) if isinstance(location, str) else None
-    if location_match is None:
-        raise KRepoError("kRepo report target.location is invalid")
-    selected_file = location_match.group("file")
-    normalized_selected = selected_file.replace("\\", "/").lower()
-    if not normalized_selected.endswith(file_filter.lower()):
-        raise KRepoError(
-            f"kRepo selected an unexpected same-name function: {selected_file}; expected file suffix {file_filter}"
-        )
+    if not _is_dict_list(param_constraints):
+        raise KRepoError("kRepo report param_constraints must be an array of objects")
+    start_line, end_line = _source_line_span(source_file, source)
     return KRepoReport(
         source=source,
         incoming_tree=incoming_tree,
         outgoing_tree=outgoing_tree,
-        selected_file=selected_file,
-        start_line=_optional_line(location_match.group("start")),
-        end_line=_optional_line(location_match.group("end")),
+        param_constraints=param_constraints,
+        start_line=start_line,
+        end_line=end_line,
     )
 
 
@@ -140,5 +126,21 @@ def _is_string_list(value: object) -> TypeGuard[list[str]]:
     return isinstance(value, list) and bool(value) and all(isinstance(item, str) for item in value)
 
 
-def _optional_line(value: str) -> int | None:
-    return int(value) if value.isdigit() and int(value) >= 1 else None
+def _is_dict_list(value: object) -> TypeGuard[list[dict[str, object]]]:
+    return isinstance(value, list) and all(isinstance(item, dict) for item in value)
+
+
+def _tree_value(payload: dict[str, object], snake_case: str, camel_case: str) -> object:
+    return payload[snake_case] if snake_case in payload else payload.get(camel_case)
+
+
+def _source_line_span(source_file: Path, source: str) -> tuple[int | None, int | None]:
+    try:
+        file_content = source_file.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None, None
+    offset = file_content.find(source)
+    if offset < 0:
+        return None, None
+    start_line = file_content.count("\n", 0, offset) + 1
+    return start_line, start_line + source.rstrip("\n").count("\n")

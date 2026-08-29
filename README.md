@@ -27,7 +27,7 @@ git submodule update --init --recursive
 运行环境：Clang/Clang++（自带 libFuzzer）、`llvm-profdata`、`llvm-cov`、
 `DEEPSEEK_API_KEY`。每个被测仓还需由 VS Code C/C++ 扩展生成
 `<repo>/.vscode/BROWSE.VC.DB`；预处理只读调用 `tools/kRepo` 的统一报告，取得
-目标函数原始片段和上下游调用树。默认无沙箱运行（沙箱为可选，见
+目标函数原始片段、上下游调用树和参数约束。默认无沙箱运行（沙箱为可选，见
 [doc/cli.md](doc/cli.md#沙箱选项)）。
 
 ## 快速使用
@@ -93,8 +93,8 @@ src/goaloop/
 第三方工具 `tools/kRepo/` 以 Git 子模块固定版本引入；goaloop 不修改其源码，也不调用
 会生成源码包的命令，仅读取 `main.py report --format json` 的标准输出。可用
 `GOALOOP_KREPO` 指向其他 kRepo 根目录或新版入口脚本 `main.py`。
-当前适配严格使用 kRepo report schema v2：`target.location` 标识目标实现，
-`incoming_tree`/`outgoing_tree` 为 Linux `tree` 风格文本的字符串数组。
+适配不依赖 kRepo 的 `schema_version`；只提取 `source`、上下游调用树和
+`param_constraints` 四项业务内容，并写入 `preprocess.json` 的 `contexts`。
 
 ## 文档
 

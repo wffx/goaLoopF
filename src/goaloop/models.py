@@ -210,7 +210,9 @@ class CapabilityReport(Contract):
         return all(item.available for item in self.capabilities)
 
 
-SourceContextKind = Literal["target_function", "incoming_tree", "outgoing_tree", "dependency", "build"]
+SourceContextKind = Literal[
+    "target_function", "incoming_tree", "outgoing_tree", "param_constraints", "dependency", "build"
+]
 
 
 class SourceContext(Contract):

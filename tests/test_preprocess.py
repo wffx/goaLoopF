@@ -48,16 +48,18 @@ def test_ready_preprocess(workspace_root: Path, default_profile: object) -> None
     assert result.language is Language.C
     assert result.target_function == "safe_parse"
     assert any(ctx.path == "src/safe.c" for ctx in result.contexts)
-    assert [context.kind for context in result.contexts[:3]] == [
+    assert [context.kind for context in result.contexts[:4]] == [
         "target_function",
         "incoming_tree",
         "outgoing_tree",
+        "param_constraints",
     ]
     target = result.contexts[0]
     assert target.content.startswith("int safe_parse")
     assert "#include" not in target.content
     assert json.loads(result.contexts[1].content)[1] == "Incoming call tree:"
     assert json.loads(result.contexts[2].content)[1] == "Outgoing call tree:"
+    assert json.loads(result.contexts[3].content)[0]["name"] == "data"
     assert result.candidate_signatures
 
 
@@ -162,7 +164,11 @@ def test_source_directory_disambiguates_duplicate_functions(
     assert result.contexts[0].path == "second/target.c"
     assert result.contexts[0].kind == "target_function"
     assert "return 2" in result.contexts[0].content
-    assert {context.kind for context in result.contexts[1:]} == {"incoming_tree", "outgoing_tree"}
+    assert {context.kind for context in result.contexts[1:]} == {
+        "incoming_tree",
+        "outgoing_tree",
+        "param_constraints",
+    }
 
 
 def test_source_file_disambiguates_duplicate_functions(workspace_root: Path, default_profile: object) -> None:
@@ -187,7 +193,11 @@ def test_source_file_disambiguates_duplicate_functions(workspace_root: Path, def
     assert result.source_scope == selected.resolve()
     assert result.contexts[0].path == "src/second.c"
     assert result.contexts[0].kind == "target_function"
-    assert {context.kind for context in result.contexts[1:]} == {"incoming_tree", "outgoing_tree"}
+    assert {context.kind for context in result.contexts[1:]} == {
+        "incoming_tree",
+        "outgoing_tree",
+        "param_constraints",
+    }
 
 
 def test_candidate_signatures_exclude_comments_and_call_sites(
@@ -413,6 +423,7 @@ def test_callers_are_replaced_by_krepo_call_trees(workspace_root: Path, default_
     assert "tests/huge_caller.c" not in paths
     assert "analysis/incomingTree.json" in paths
     assert "analysis/outgoingTree.json" in paths
+    assert "analysis/param_constraints.json" in paths
     assert next(item for item in result.contexts if item.kind == "incoming_tree").content
     assert next(item for item in result.contexts if item.kind == "outgoing_tree").content
 

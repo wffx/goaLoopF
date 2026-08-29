@@ -7,8 +7,8 @@
 
 ### 现状问题
 
-> 当前实现已改为通过 kRepo 注入目标函数原始片段与 `incoming_tree`/
-> `outgoing_tree`，不再注入整份调用/引用文件。本文保留为后续“模型按需请求额外
+> 当前实现已改为通过 kRepo 注入目标函数原始片段、`incoming_tree`/
+> `outgoing_tree` 与 `param_constraints`，不再注入整份调用/引用文件。本文保留为后续“模型按需请求额外
 > 声明”的设计草案，其中关于旧 contexts 基线的描述不再代表当前实现。
 
 对于调用链复杂的被测对象，旧版 `preprocess.json` 仍然臃肿：

@@ -69,7 +69,7 @@ def fake_krepo_report(monkeypatch: pytest.MonkeyPatch) -> None:
             source=source,
             incoming_tree=[f"Target: {function} ({location})", "Incoming call tree:", function],
             outgoing_tree=[f"Target: {function} ({location})", "Outgoing call tree:", function],
-            selected_file=str(source_file),
+            param_constraints=[{"name": "data", "type": "const uint8_t *"}],
             start_line=start_line,
             end_line=end_line,
         )

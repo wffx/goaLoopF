@@ -95,7 +95,7 @@
 FuzzRunRequest ──► preprocess ──► kRepo report（只读 BROWSE.VC.DB）
                                       │
                                       ▼
-                         函数原片段 + incoming/outgoing tree
+                   函数原片段 + incoming/outgoing tree + 参数约束
                                       │
                                       ▼
                               PreprocessResult ──► driver.generate_artifacts()

@@ -21,14 +21,12 @@ def _write_cli(path: Path, payload: object, *, exit_code: int = 0) -> None:
     )
 
 
-def _payload(source_file: Path) -> dict[str, object]:
-    location = f"{source_file}:7-9"
+def _payload() -> dict[str, object]:
     return {
-        "schema_version": 2,
-        "source": "int target_fn(void) {\n    return 1;\n}",
-        "target": {"name": "target_fn", "location": location},
-        "incoming_tree": [f"Target: target_fn ({location})", "Incoming call tree:", "target_fn"],
-        "outgoing_tree": [f"Target: target_fn ({location})", "Outgoing call tree:", "target_fn"],
+        "source": "int target_fn(void) { return 1; }",
+        "incoming_tree": ["Incoming call tree:", "target_fn"],
+        "outgoing_tree": ["Outgoing call tree:", "target_fn"],
+        "param_constraints": [{"name": "enabled", "type": "int", "constraints": ["0 or 1"]}],
     }
 
 
@@ -51,15 +49,16 @@ def test_reads_report_json_without_writing_krepo(
     source.parent.mkdir(parents=True)
     source.write_text("int target_fn(void) { return 1; }\n", encoding="utf-8")
     cli = tmp_path / "fake-krepo" / "main.py"
-    _write_cli(cli, _payload(source))
+    _write_cli(cli, _payload())
     monkeypatch.setenv("GOALOOP_KREPO", str(cli))
 
     report = read_krepo_report(workspace, repo, source, "target_fn")
 
     assert report.source.startswith("int target_fn")
-    assert report.start_line == 7
-    assert report.incoming_tree[1] == "Incoming call tree:"
-    assert report.outgoing_tree[1] == "Outgoing call tree:"
+    assert report.start_line == 1
+    assert report.incoming_tree[0] == "Incoming call tree:"
+    assert report.outgoing_tree[0] == "Outgoing call tree:"
+    assert report.param_constraints[0]["name"] == "enabled"
     assert not list(cli.parent.rglob("__pycache__"))
 
 
@@ -77,32 +76,52 @@ def test_rejects_invalid_json(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
         read_krepo_report(workspace, repo, source, "target_fn")
 
 
-def test_rejects_legacy_report_schema(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_ignores_report_schema_version(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     workspace = tmp_path / "workspace"
     repo = workspace / "repo"
     source = repo / "target.c"
     source.parent.mkdir(parents=True)
     source.write_text("int target_fn(void) { return 1; }\n", encoding="utf-8")
-    payload = _payload(source)
-    payload.pop("schema_version")
-    cli = tmp_path / "legacy-krepo.py"
+    payload = _payload()
+    payload["schema_version"] = 999
+    cli = tmp_path / "future-krepo.py"
     _write_cli(cli, payload)
     monkeypatch.setenv("GOALOOP_KREPO", str(cli))
 
-    with pytest.raises(KRepoError, match="schema_version must be 2"):
-        read_krepo_report(workspace, repo, source, "target_fn")
+    report = read_krepo_report(workspace, repo, source, "target_fn")
+
+    assert report.source.startswith("int target_fn")
 
 
-def test_rejects_unexpected_selected_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_accepts_camel_case_tree_keys(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     workspace = tmp_path / "workspace"
     repo = workspace / "repo"
     source = repo / "target.c"
-    other = repo / "other.c"
     source.parent.mkdir(parents=True)
     source.write_text("int target_fn(void) { return 1; }\n", encoding="utf-8")
-    cli = tmp_path / "wrong-krepo.py"
-    _write_cli(cli, _payload(other))
+    payload = _payload()
+    payload["incomingTree"] = payload.pop("incoming_tree")
+    payload["outgoingTree"] = payload.pop("outgoing_tree")
+    cli = tmp_path / "camel-krepo.py"
+    _write_cli(cli, payload)
     monkeypatch.setenv("GOALOOP_KREPO", str(cli))
 
-    with pytest.raises(KRepoError, match="unexpected same-name function"):
+    report = read_krepo_report(workspace, repo, source, "target_fn")
+
+    assert report.incoming_tree[0] == "Incoming call tree:"
+
+
+def test_requires_param_constraints(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    workspace = tmp_path / "workspace"
+    repo = workspace / "repo"
+    source = repo / "target.c"
+    source.parent.mkdir(parents=True)
+    source.write_text("int target_fn(void) { return 1; }\n", encoding="utf-8")
+    payload = _payload()
+    payload.pop("param_constraints")
+    cli = tmp_path / "missing-params.py"
+    _write_cli(cli, payload)
+    monkeypatch.setenv("GOALOOP_KREPO", str(cli))
+
+    with pytest.raises(KRepoError, match="param_constraints"):
         read_krepo_report(workspace, repo, source, "target_fn")
