@@ -91,7 +91,8 @@ src/goaloop/
 ```
 
 第三方工具 `tools/kRepo/` 以 Git 子模块固定版本引入；goaloop 不修改其源码，也不调用
-会生成源码包的命令，仅读取 `report --format json` 的标准输出。
+会生成源码包的命令，仅读取 `main.py report --format json` 的标准输出。可用
+`GOALOOP_KREPO` 指向其他 kRepo 根目录或新版入口脚本 `main.py`。
 
 ## 文档
 

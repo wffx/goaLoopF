@@ -5,7 +5,7 @@
 - 工作区根目录：`GOALOOP_WORKSPACE` 环境变量，或当前目录；相对 `--repo` 路径以此为根
 - Profile 搜索路径：`<workspace>/profiles/` → `~/.config/goaloop/profiles/`
 - 模型 Profile 搜索路径：`<workspace>/model-profiles/` → `~/.config/goaloop/model-profiles/`
-- kRepo：默认 `<workspace>/tools/kRepo/`；可用 `GOALOOP_KREPO` 指向 kRepo 根目录或 `cpp_meta_query.py`
+- kRepo：默认 `<workspace>/tools/kRepo/main.py`；可用 `GOALOOP_KREPO` 指向 kRepo 根目录或新版入口脚本 `main.py`
 - 所有 run 产物写入 `work/<project>/runs/<run-id>/`
 - 原始模型会话：`.private-sessions/<run-id>/`（仅供恢复审计）
 

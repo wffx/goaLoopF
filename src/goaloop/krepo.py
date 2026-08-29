@@ -33,7 +33,7 @@ def krepo_cli_path(workspace_root: Path) -> Path:
     override = os.environ.get("GOALOOP_KREPO")
     candidate = Path(override).expanduser() if override else workspace_root / "tools" / "kRepo"
     if candidate.is_dir():
-        candidate = candidate / "src" / "cpp_meta_query.py"
+        candidate = candidate / "main.py"
     return candidate.resolve(strict=False)
 
 

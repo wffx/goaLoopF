@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from goaloop.krepo import KRepoError, read_krepo_report
+from goaloop.krepo import KRepoError, krepo_cli_path, read_krepo_report
 
 
 def _write_cli(path: Path, payload: object, *, exit_code: int = 0) -> None:
@@ -33,6 +33,16 @@ def _payload(source_file: Path) -> dict[str, object]:
         "incoming_tree": {"selected": selected, "functions": [selected], "edges": {}},
         "outgoing_tree": {"selected": selected, "functions": [selected], "edges": {}},
     }
+
+
+def test_resolves_current_directory_entrypoint(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    krepo_root = tmp_path / "kRepo"
+    current_cli = krepo_root / "main.py"
+    current_cli.parent.mkdir(parents=True)
+    current_cli.touch()
+    monkeypatch.setenv("GOALOOP_KREPO", str(krepo_root))
+
+    assert krepo_cli_path(tmp_path) == current_cli.resolve()
 
 
 def test_reads_report_json_without_writing_krepo(
