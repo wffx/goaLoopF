@@ -17,6 +17,7 @@ from .config import load_model_profile, load_validation_profile
 from .driver import DeepSeekHarnessDriver
 from .krepo import krepo_cli_path
 from .models import Capability, FuzzRunRequest, Language, ModelProfile, RunEvent, RunState
+from .redaction import redact
 from .report import REPORT_FILENAME, VALIDATION_FILENAME
 from .storage import ArtifactStore, create_run_id
 from .workflow import RunController
@@ -98,6 +99,7 @@ def run(
         help="root directory for this run's products (default: <workspace>/work)",
     ),
     verbose: bool = typer.Option(False, "--verbose", help="include event payloads in live progress output"),
+    debug: bool = typer.Option(False, "--debug", help="stream redacted DSH/model trace events"),
     workspace: Path | None = typer.Option(None, "--workspace", help="workspace root (default: cwd)"),
 ) -> None:
     """Run the full four-phase workflow for one target function."""
@@ -129,6 +131,7 @@ def run(
         workspace_root=ws,
         session_root=private_session,
         run_id=run_id,
+        on_trace=_dsh_trace_printer(ws) if debug else None,
     )
     backend = LocalLinuxBackend(validation)
     controller = RunController(
@@ -168,6 +171,7 @@ def resume(
         help="root directory where the run's products live (default: <workspace>/work)",
     ),
     verbose: bool = typer.Option(False, "--verbose", help="include event payloads in live progress output"),
+    debug: bool = typer.Option(False, "--debug", help="stream redacted DSH/model trace events"),
     workspace: Path | None = typer.Option(None, "--workspace"),
 ) -> None:
     """Resume a run from its persisted checkpoint."""
@@ -187,6 +191,7 @@ def resume(
         workspace_root=ws,
         session_root=private_session,
         run_id=run_id,
+        on_trace=_dsh_trace_printer(ws) if debug else None,
     )
     backend = LocalLinuxBackend(validation)
     controller = RunController(
@@ -326,6 +331,7 @@ def evaluate(
         help="root directory for run products and the results file (default: <workspace>/work)",
     ),
     workspace: Path | None = typer.Option(None, "--workspace"),
+    debug: bool = typer.Option(False, "--debug", help="stream redacted DSH/model trace events"),
 ) -> None:
     """Run a suite of entries several times and summarize outcomes."""
     ws = _workspace_root(workspace)
@@ -376,6 +382,7 @@ def evaluate(
                 workspace_root=ws,
                 session_root=private_session,
                 run_id=run_id,
+                on_trace=_dsh_trace_printer(ws) if debug else None,
             )
             backend = LocalLinuxBackend(validation)
             controller = RunController(
@@ -554,6 +561,21 @@ def _event_printer(verbose: bool) -> Callable[[RunEvent], None]:
         if verbose and payload:
             line += f" details={json.dumps(payload, ensure_ascii=False, default=str)[:500]}"
         typer.echo(f"[goaloop] phase={event.phase.value} {line}")
+
+    return _print
+
+
+def _dsh_trace_printer(workspace_root: Path) -> Callable[[str, dict[str, Any]], None]:
+    """Return a callback that streams one redacted DSH notification per line."""
+
+    def _print(method: str, payload: dict[str, Any]) -> None:
+        trace = json.dumps(
+            {"method": method, "payload": payload},
+            ensure_ascii=False,
+            default=str,
+            separators=(",", ":"),
+        )
+        typer.echo(f"[goaloop][debug][dsh] {redact(trace, workspace_root)}")
 
     return _print
 

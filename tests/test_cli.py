@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from goaloop.cli import _event_printer, app
+from goaloop.cli import _dsh_trace_printer, _event_printer, app
 from goaloop.models import FuzzRunRequest, GenerationGoal, Phase, RunEvent, RunState, TerminalStatus
 from goaloop.storage import ArtifactStore
 
@@ -135,6 +135,11 @@ class TestReport:
 
 
 class TestRun:
+    def test_help_includes_debug(self) -> None:
+        result = runner.invoke(app, ["run", "--help"])
+        assert result.exit_code == 0
+        assert "--debug" in result.output
+
     def test_missing_repo_is_needs_input(self, workspace_root: Path) -> None:
         result = runner.invoke(
             app,
@@ -203,6 +208,28 @@ class TestRun:
 
 
 class TestProgressOutput:
+    def test_debug_printer_streams_redacted_dsh_trace(self, capsys, tmp_path: Path) -> None:
+        printer = _dsh_trace_printer(tmp_path)
+        printer(
+            "session.event",
+            {
+                "sessionId": "run-1",
+                "event": {
+                    "type": "assistant/message",
+                    "content": f"read {tmp_path}/src/a.c with sk-123456789",
+                },
+            },
+        )
+
+        output = capsys.readouterr().out
+        assert output.startswith("[goaloop][debug][dsh] ")
+        assert '"method":"session.event"' in output
+        assert '"type":"assistant/message"' in output
+        assert "sk-123456789" not in output
+        assert str(tmp_path) not in output
+        assert "<redacted>" in output
+        assert "<workspace>" in output
+
     def test_default_printer_shows_phase_and_step(self, capsys) -> None:
         printer = _event_printer(False)
         printer(
@@ -266,6 +293,11 @@ class TestProgressOutput:
 
 
 class TestResume:
+    def test_help_includes_debug(self) -> None:
+        result = runner.invoke(app, ["resume", "--help"])
+        assert result.exit_code == 0
+        assert "--debug" in result.output
+
     def test_missing_run(self, workspace_root: Path) -> None:
         result = runner.invoke(app, ["resume", "--run-id", "no-such-run", "--workspace", str(workspace_root)])
         assert result.exit_code != 0
@@ -324,6 +356,11 @@ class TestOutputDir:
 
 
 class TestEvaluate:
+    def test_help_includes_debug(self) -> None:
+        result = runner.invoke(app, ["evaluate", "--help"])
+        assert result.exit_code == 0
+        assert "--debug" in result.output
+
     def test_missing_manifest(self, workspace_root: Path) -> None:
         result = runner.invoke(
             app, ["evaluate", str(workspace_root / "no-suite.json"), "--workspace", str(workspace_root)]

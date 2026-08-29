@@ -280,10 +280,17 @@ class FakeHarness:
         self.calls: list[tuple[str, str | None]] = []
         self.closed = False
 
-    def run(self, prompt: str, session_id: str | None = None) -> object:
+    def run(self, prompt: str, session_id: str | None = None, on_notification=None) -> object:
         from types import SimpleNamespace
 
         self.calls.append((prompt, session_id))
+        if on_notification is not None:
+            on_notification(
+                SimpleNamespace(
+                    method="session.event",
+                    payload={"sessionId": session_id, "event": {"type": "assistant/message"}},
+                )
+            )
         if not self.responses:
             raise RuntimeError("fake harness has no more responses")
         return SimpleNamespace(
@@ -329,6 +336,21 @@ class TestDeepSeekHarnessDriver:
         artifacts = driver.generate_artifacts(goal=_goal(), preprocess=_preprocess(), feedback=None)
         assert artifacts.generation_loop == 1
         assert driver.format_retries == 0
+
+    def test_streams_sdk_notifications_to_trace_callback(self) -> None:
+        traces: list[tuple[str, dict]] = []
+        driver = _real_driver()
+        driver.on_trace = lambda method, payload: traces.append((method, payload))
+        driver._harness = FakeHarness([json.dumps(_live_payload())])
+
+        driver.generate_artifacts(goal=_goal(), preprocess=_preprocess(), feedback=None)
+
+        assert traces == [
+            (
+                "session.event",
+                {"sessionId": "run-live-g01", "event": {"type": "assistant/message"}},
+            )
+        ]
 
     def test_per_loop_session_isolation(self) -> None:
         # Each generation loop must run in its own session so the runtime does
@@ -481,7 +503,7 @@ class TestDeepSeekHarnessDriver:
         driver._harness = FakeHarness([])  # raises RuntimeError on run()
 
         class Boom:
-            def run(self, prompt, session_id=None) -> object:
+            def run(self, prompt, session_id=None, on_notification=None) -> object:
                 raise ConnectionError("network down")
 
         driver._harness = Boom()
@@ -500,7 +522,7 @@ class TestDeepSeekHarnessDriver:
         driver = _real_driver()
 
         class Boom:
-            def run(self, prompt, session_id=None) -> object:
+            def run(self, prompt, session_id=None, on_notification=None) -> object:
                 raise TimeoutError("sdk hung")
 
         driver._harness = Boom()

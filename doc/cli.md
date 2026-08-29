@@ -17,7 +17,7 @@
 goaloop run --repo repos/<project> --source <dir-or-file> --function <symbol>
             [--language auto|c|cpp] [--profile default]
             [--model-profile default] [--max-generation-loops 5]
-            [--fuzz-seconds 600] [--workspace <path>]
+            [--fuzz-seconds 600] [--debug] [--workspace <path>]
 ```
 
 | 参数 | 默认 | 说明 |
@@ -39,6 +39,7 @@ goaloop run --repo repos/<project> --source <dir-or-file> --function <symbol>
 | `--api-key` | 环境变量 | 覆盖模型凭据（注入 Profile 的 `api_key_env`，仅本次进程生效，不落盘） |
 | `--output` | `<workspace>/work` | 产物根目录（run 目录 = `<output>/<project>/runs/<run-id>/`）。适合把产物放到外部磁盘/独立目录；`resume`/`status`/`report` 需传相同的 `--output` 定位 run |
 | `--verbose` | `false` | 默认已实时打印 phase/step 进度；启用后额外输出每个事件的 payload 详情 |
+| `--debug` | `false` | 实时输出 DSH SDK 通知，即 DSH 与模型交互过程中产生的 trace；每条通知为一行脱敏 JSON |
 | `--workspace` | cwd | 工作区根目录 |
 
 运行期间持续输出当前 `phase`、`step` 和 loop；模型调用、编译、fuzz、覆盖、crash
@@ -47,11 +48,12 @@ goaloop run --repo repos/<project> --source <dir-or-file> --function <symbol>
 ### `goaloop resume` — 从断点续跑
 
 ```bash
-goaloop resume --run-id <id> [--output <dir>] [--verbose] [--workspace <path>]
+goaloop resume --run-id <id> [--output <dir>] [--verbose] [--debug] [--workspace <path>]
 ```
 
 从 `state.json`/`events.jsonl` 恢复状态，继续执行。已完成的证据不重复覆盖。
 若该 run 使用了 `--output`，这里必须传相同的 `--output`。
+`--debug` 与 `run` 行为相同，会实时显示恢复后发生的 DSH/model trace。
 
 ### `goaloop status` — 查看 run 状态
 
@@ -83,7 +85,7 @@ goaloop doctor [--profile default] [--model-profile default] [--workspace <path>
 ### `goaloop evaluate` — 批量研究
 
 ```bash
-goaloop evaluate <suite.json> [--repetitions 3] [--output <dir>] [--workspace <path>]
+goaloop evaluate <suite.json> [--repetitions 3] [--output <dir>] [--debug] [--workspace <path>]
 ```
 
 suite.json 格式：
@@ -97,6 +99,15 @@ suite.json 格式：
 ```
 
 对每个 entry 重复 `repetitions` 次，汇总终态分布，写入 `evaluate-results.json`。
+启用 `--debug` 时，每个运行同样实时输出 DSH/model trace。
+
+### 实时 DSH/model trace
+
+`run`、`resume` 和 `evaluate` 的 `--debug` 会把 SDK 的 `session.event`、
+`session.status` 等通知在收到时立即输出到 Terminal，每条记录以
+`[goaloop][debug][dsh]` 开头，后跟单行 JSON。输出会脱敏 API key、Bearer token、
+workspace 和绝对路径，但仍可能包含提示词源码片段和模型回答，只应在可信终端中启用。
+不开启时没有额外 Terminal 输出，完整 SDK 会话仍保存在 `.private-sessions/<run-id>/`。
 
 ## 使用示例
 

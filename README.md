@@ -36,6 +36,7 @@ git submodule update --init --recursive
 export DEEPSEEK_API_KEY='...'
 goaloop doctor --profile default
 goaloop run --repo repos/cJSON-1.7.17 --source . --function cJSON_Parse --profile default
+# 排查模型交互时追加 --debug，实时显示脱敏后的 DSH/model trace
 ```
 
 - 代码仓放在 `repos/<project>/`（或任意自定义目录，见下）；`--source` 指定仓内

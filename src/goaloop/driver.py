@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -26,6 +27,7 @@ from .models import (
 from .redaction import redact
 
 PROMPT_VERSION = "goaloop-artifacts-v2"
+TraceCallback = Callable[[str, dict[str, Any]], None]
 
 # Compact contract description embedded in every generation prompt. A full
 # JSON Schema dump is ~4600 chars and mostly redundant: the controller applies
@@ -123,6 +125,7 @@ class DeepSeekHarnessDriver:
         run_id: str,
         base_url: str | None = None,
         max_input_tokens: int | None = None,
+        on_trace: TraceCallback | None = None,
     ) -> None:
         self.provider = provider
         self.model = model
@@ -133,6 +136,7 @@ class DeepSeekHarnessDriver:
         self.workspace_root = Path(workspace_root).resolve()
         self.session_root = Path(session_root)
         self.run_id = run_id
+        self.on_trace = on_trace
         self.format_retries = 0
         self._harness: Any = None
         self._last_session_id: str | None = None
@@ -192,6 +196,7 @@ class DeepSeekHarnessDriver:
                     "any further artifacts."
                 ),
                 session_id=self._last_session_id or self.run_id,
+                on_notification=self._handle_notification if self.on_trace is not None else None,
             )
         except Exception as exc:  # completion is best-effort; state is controller-owned
             raise DriverUnavailable(f"goal completion message failed: {exc}") from exc
@@ -224,6 +229,13 @@ class DeepSeekHarnessDriver:
     def _generation_session_id(self, loop: int) -> str:
         return f"{self.run_id}-g{loop:02d}"
 
+    def _handle_notification(self, notification: object) -> None:
+        if self.on_trace is None:
+            return
+        method = str(getattr(notification, "method", "unknown"))
+        payload = getattr(notification, "payload", {})
+        self.on_trace(method, payload if isinstance(payload, dict) else {"value": payload})
+
     def _run_prompt(self, prompt: str, *, session_id: str) -> str:
         estimated = estimate_tokens(prompt)
         if self.max_input_tokens is not None:
@@ -243,7 +255,11 @@ class DeepSeekHarnessDriver:
         try:
             harness = self._open()
             self._last_session_id = session_id
-            result = harness.run(prompt, session_id=session_id)
+            result = harness.run(
+                prompt,
+                session_id=session_id,
+                on_notification=self._handle_notification if self.on_trace is not None else None,
+            )
         except DriverUnavailable:
             raise
         except Exception as exc:
