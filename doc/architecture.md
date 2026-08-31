@@ -50,6 +50,10 @@
     └──────────────────────────────────────────────────────────────────────────┘
 ```
 
+进入 generation 后，Driver 始终订阅 DSH notification，将未脱敏原始记录追加到
+`logs/dsh-trace.jsonl`，并同步维护 `logs/dsh-trace-summary.json`。该观察链路不向模型
+新增 Bash、文件、网络或 subagent 权限。
+
 ## 一次候选执行（compile → fuzz → coverage → decide）
 
 ```

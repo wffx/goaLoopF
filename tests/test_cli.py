@@ -216,19 +216,41 @@ class TestProgressOutput:
                 "sessionId": "run-1",
                 "event": {
                     "type": "assistant/message",
-                    "content": f"read {tmp_path}/src/a.c with sk-123456789",
+                    "data": {
+                        "turn": 1,
+                        "step": 1,
+                        "message": {
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": f"read {tmp_path}/src/a.c with sk-123456789",
+                                }
+                            ]
+                        },
+                    },
                 },
             },
         )
 
         output = capsys.readouterr().out
         assert output.startswith("[goaloop][debug][dsh] ")
-        assert '"method":"session.event"' in output
-        assert '"type":"assistant/message"' in output
+        assert "assistant response turn=1 step=1" in output
         assert "sk-123456789" not in output
         assert str(tmp_path) not in output
         assert "<redacted>" in output
         assert "<workspace>" in output
+
+    def test_debug_printer_hides_session_title(self, capsys, tmp_path: Path) -> None:
+        printer = _dsh_trace_printer(tmp_path)
+        printer(
+            "session.event",
+            {
+                "sessionId": "run-1",
+                "event": {"type": "session/title", "data": {"title": "large generated title"}},
+            },
+        )
+
+        assert capsys.readouterr().out == ""
 
     def test_default_printer_shows_phase_and_step(self, capsys) -> None:
         printer = _event_printer(False)
@@ -370,6 +392,39 @@ class TestOutputDir:
 
 
 class TestEvaluate:
+    def test_observability_aggregation(self) -> None:
+        from goaloop.cli import _evaluate_observability
+
+        summary = _evaluate_observability(
+            [
+                {
+                    "function": "parse",
+                    "dsh_trace_events": 10,
+                    "model_calls": 2,
+                    "model_call_seconds": 1.5,
+                    "estimated_input_tokens": 300,
+                    "model_response_chars": 500,
+                    "tool_calls": 1,
+                    "format_retries": 0,
+                },
+                {
+                    "function": "parse",
+                    "dsh_trace_events": 14,
+                    "model_calls": 3,
+                    "model_call_seconds": 2.5,
+                    "estimated_input_tokens": 500,
+                    "model_response_chars": 700,
+                    "tool_calls": 2,
+                    "format_retries": 1,
+                },
+            ]
+        )
+
+        assert summary["parse"]["trace_events"] == 24
+        assert summary["parse"]["model_calls"] == 5
+        assert summary["parse"]["average_model_call_seconds"] == 2.0
+        assert summary["parse"]["average_estimated_input_tokens"] == 400.0
+
     def test_help_includes_debug(self) -> None:
         result = runner.invoke(app, ["evaluate", "--help"])
         assert result.exit_code == 0

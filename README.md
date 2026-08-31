@@ -36,13 +36,13 @@ git submodule update --init --recursive
 export DEEPSEEK_API_KEY='...'
 goaloop doctor --profile default
 goaloop run --repo repos/cJSON-1.7.17 --source . --function cJSON_Parse --profile default
-# 排查模型交互时追加 --debug，实时显示脱敏后的 DSH/model trace
+# 排查模型交互时追加 --debug，实时显示过滤、聚合、脱敏后的 DSH/model 进度
 ```
 
 - 代码仓放在 `repos/<project>/`（或任意自定义目录，见下）；`--source` 指定仓内
   被测函数所在目录或文件
 - 所有输出写入 `work/<project>/runs/<run-id>/`（可用 `--output <dir>` 指定
-  产物根目录），报告为 `report.md`
+  产物根目录），报告为 `report.md`；原始 DSH trace 和摘要位于 `logs/`
 - 支持 `resume` / `status` / `report` / `evaluate`，详见 [doc/cli.md](doc/cli.md)
 - 默认使用 DeepSeek 模型；也支持 OpenAI/Anthropic 等任意模型或 OpenAI 兼容
   网关（通过 pi-ai 适配器，`--model-profile` 选择，见
@@ -111,6 +111,7 @@ dependency 和构建文件内容不进入 `preprocess.json`；模型在 generati
 | [doc/contracts.md](doc/contracts.md) | 数据契约全景、终态映射 |
 | [doc/cli.md](doc/cli.md) | 命令参考、沙箱选项、环境变量 |
 | [doc/testing.md](doc/testing.md) | 测试结构与端到端覆盖 |
+| [doc/observability.md](doc/observability.md) | 原始 DSH trace、摘要指标与优化方法 |
 
 测试与静态检查：`.venv/bin/python -m pytest tests/ -q`、`ruff check src tests`、
 `mypy src/goaloop/`（详见 [doc/testing.md](doc/testing.md)）。

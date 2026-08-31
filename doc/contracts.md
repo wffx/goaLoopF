@@ -55,7 +55,7 @@ session 回填结果；每轮最多 3 个查询回合、合计 6 个查询。
 | 模型 | 用途 | 关键约束 |
 |---|---|---|
 | `ValidationResult` | 验证结论 | 携带 `status`、`execution`、`crash_analysis`、`report_path` |
-| `ResearchMetrics` | 研究指标导出 | `token_source` 限 `sdk`/`unavailable`；`phase_durations`、`generation_loops_used`、`first_compile_success`、`time_to_bug_seconds` |
+| `ResearchMetrics` | 研究指标导出 | `token_source` 限 `sdk`/`unavailable`；包含阶段耗时、generation loops、格式重试，以及 DSH trace 路径、事件数、模型调用耗时/规模和工具调用计数 |
 
 ## 状态与持久化
 

@@ -39,7 +39,7 @@ goaloop run --repo repos/<project> --source <dir-or-file> --function <symbol>
 | `--api-key` | 环境变量 | 覆盖模型凭据（注入 Profile 的 `api_key_env`，仅本次进程生效，不落盘） |
 | `--output` | `<workspace>/work` | 产物根目录（run 目录 = `<output>/<project>/runs/<run-id>/`）。适合把产物放到外部磁盘/独立目录；`resume`/`status`/`report` 需传相同的 `--output` 定位 run |
 | `--verbose` | `false` | 默认已实时打印 phase/step 进度；启用后额外输出每个事件的 payload 详情 |
-| `--debug` | `false` | 实时输出 DSH SDK 通知，即 DSH 与模型交互过程中产生的 trace；每条通知为一行脱敏 JSON |
+| `--debug` | `false` | 实时输出经过过滤和聚合的 DSH/model 进度；隐藏 title/request/prompt 噪声，合并流式 chunk，保留模型、turn、step、工具和最终响应摘要 |
 | `--workspace` | cwd | 工作区根目录 |
 
 运行期间持续输出当前 `phase`、`step` 和 loop；模型调用、编译、fuzz、覆盖、crash
@@ -103,16 +103,33 @@ suite.json 格式：
 }
 ```
 
-对每个 entry 重复 `repetitions` 次，汇总终态分布，写入 `evaluate-results.json`。
+对每个 entry 重复 `repetitions` 次，汇总终态分布以及 DSH trace 事件、模型调用耗时、
+估算输入 token、响应规模、工具调用和格式重试，写入 `evaluate-results.json`。
 启用 `--debug` 时，每个运行同样实时输出 DSH/model trace。
 
 ### 实时 DSH/model trace
 
-`run`、`resume` 和 `evaluate` 的 `--debug` 会把 SDK 的 `session.event`、
-`session.status` 等通知在收到时立即输出到 Terminal，每条记录以
-`[goaloop][debug][dsh]` 开头，后跟单行 JSON。输出会脱敏 API key、Bearer token、
-workspace 和绝对路径，但仍可能包含提示词源码片段和模型回答，只应在可信终端中启用。
-不开启时没有额外 Terminal 输出，完整 SDK 会话仍保存在 `.private-sessions/<run-id>/`。
+`run`、`resume` 和 `evaluate` 的 `--debug` 会将 DSH 通知转换成面向用户的单行进度，
+每条记录以 `[goaloop][debug][dsh]` 开头。Terminal 视图会：
+
+- 隐藏 `session/title`、request header/context、完整 user prompt 和 inbox 事件；
+- 不逐条打印 reasoning/text delta，而是每新增约 2 KiB 输出一次累计流式进度；
+- 在 committed message 时输出 reasoning 长度和尾部摘要；
+- 对 `GeneratedArtifactSet` 仅显示 loop、ready、文件数和 summary，不展开文件内容；
+- 显示 turn/step、工具调用与结果、goal 变化、模型耗时和 kRepo 查询状态；
+- 对未知事件输出最多 360 字符的紧凑摘要。
+
+Terminal 输出仍会脱敏 API key、Bearer token、workspace 和绝对路径，只应在可信终端
+中启用。需要逐事件查看时，应读取 run 目录中的原始 trace，而不是依赖 Terminal。
+不开启时没有额外 Terminal 输出，但通知仍会被订阅和持久化：
+
+- `<run-dir>/logs/dsh-trace.jsonl`：原始、未脱敏的 SDK notification 和 goaloop 遥测；
+- `<run-dir>/logs/dsh-trace-summary.json`：事件、模型调用、耗时、输入/输出规模和工具调用摘要；
+- `.private-sessions/<run-id>/`：DSH 自身的完整 session persistence。
+
+原始 trace 可能包含源码、提示词、模型回答、绝对路径和凭据，应按敏感数据管理。
+`resume` 会在同一 JSONL 后继续追加，并从原始记录重建摘要。详细字段和分析方法见
+[observability.md](observability.md)。
 
 ## 使用示例
 

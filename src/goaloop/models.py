@@ -558,6 +558,14 @@ class ResearchMetrics(Contract):
     final_status: TerminalStatus
     token_source: Literal["sdk", "unavailable"] = "unavailable"
     tokens_used: int | None = None
+    dsh_trace_path: str | None = None
+    dsh_trace_summary_path: str | None = None
+    dsh_trace_events: int = 0
+    model_calls: int = 0
+    model_call_seconds: float = 0.0
+    estimated_input_tokens: int = 0
+    model_response_chars: int = 0
+    tool_calls: int = 0
     time_to_bug_seconds: float | None = None
     loop_hashes: dict[str, dict[str, str]] = Field(default_factory=dict)
 

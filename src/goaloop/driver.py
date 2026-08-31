@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -27,6 +28,7 @@ from .models import (
     PreprocessResult,
 )
 from .redaction import redact
+from .trace import DshTraceRecorder
 
 PROMPT_VERSION = "goaloop-artifacts-v3"
 TraceCallback = Callable[[str, dict[str, Any]], None]
@@ -118,6 +120,7 @@ class GenerationDriver(Protocol):
         feedback: GenerationFeedback | None,
     ) -> GeneratedArtifactSet: ...
     def configure_run(self, *, run_dir: Path) -> None: ...
+    def trace_summary(self) -> dict[str, Any]: ...
     def complete_goal(self, *, goal: GenerationGoal, summary: str) -> None: ...
     def close(self) -> None: ...
 
@@ -154,6 +157,8 @@ class DeepSeekHarnessDriver:
         self._last_session_id: str | None = None
         self._run_dir: Path | None = None
         self._krepo_service: KRepoQueryService | None = None
+        self._trace_recorder: DshTraceRecorder | None = None
+        self._model_call_sequence = 0
 
     def configure_run(self, *, run_dir: Path) -> None:
         """Bind durable query audit/cache storage once preprocess names the run directory."""
@@ -161,6 +166,10 @@ class DeepSeekHarnessDriver:
         if self._run_dir != resolved:
             self._run_dir = resolved
             self._krepo_service = None
+            self._trace_recorder = DshTraceRecorder(run_id=self.run_id, logs_dir=resolved / "logs")
+
+    def trace_summary(self) -> dict[str, Any]:
+        return self._trace_recorder.snapshot() if self._trace_recorder is not None else {}
 
     def generate_artifacts(
         self,
@@ -228,7 +237,7 @@ class DeepSeekHarnessDriver:
                     "any further artifacts."
                 ),
                 session_id=self._last_session_id or self.run_id,
-                on_notification=self._handle_notification if self.on_trace is not None else None,
+                on_notification=self._handle_notification,
             )
         except Exception as exc:  # completion is best-effort; state is controller-owned
             raise DriverUnavailable(f"goal completion message failed: {exc}") from exc
@@ -351,15 +360,15 @@ class DeepSeekHarnessDriver:
         return results
 
     def _trace(self, method: str, payload: dict[str, Any]) -> None:
+        if self._trace_recorder is not None:
+            self._trace_recorder.record(method, payload)
         if self.on_trace is not None:
             self.on_trace(method, payload)
 
     def _handle_notification(self, notification: object) -> None:
-        if self.on_trace is None:
-            return
         method = str(getattr(notification, "method", "unknown"))
         payload = getattr(notification, "payload", {})
-        self.on_trace(method, payload if isinstance(payload, dict) else {"value": payload})
+        self._trace(method, payload if isinstance(payload, dict) else {"value": payload})
 
     def _run_prompt(self, prompt: str, *, session_id: str) -> str:
         estimated = estimate_tokens(prompt)
@@ -380,18 +389,53 @@ class DeepSeekHarnessDriver:
         try:
             harness = self._open()
             self._last_session_id = session_id
+            self._model_call_sequence += 1
+            call_id = f"{session_id}:{self._model_call_sequence}"
+            started = time.monotonic()
+            self._trace(
+                "goaloop.model_call.started",
+                {
+                    "call_id": call_id,
+                    "session_id": session_id,
+                    "prompt_chars": len(prompt),
+                    "estimated_input_tokens": estimated,
+                },
+            )
             result = harness.run(
                 prompt,
                 session_id=session_id,
-                on_notification=self._handle_notification if self.on_trace is not None else None,
+                on_notification=self._handle_notification,
             )
         except DriverUnavailable:
             raise
         except Exception as exc:
+            if "started" in locals():
+                self._trace(
+                    "goaloop.model_call.failed",
+                    {
+                        "call_id": call_id,
+                        "session_id": session_id,
+                        "duration_seconds": round(time.monotonic() - started, 6),
+                        "error_type": type(exc).__name__,
+                        "error": str(exc),
+                    },
+                )
             raise DriverUnavailable(f"SDK call failed: {exc}") from exc
         raw_response = getattr(result, "final_response", None)
         response = "" if raw_response is None else str(raw_response)
         finish_reason = str(getattr(result, "finish_reason", "unknown"))
+        self._trace(
+            "goaloop.model_call.completed",
+            {
+                "call_id": call_id,
+                "session_id": session_id,
+                "duration_seconds": round(time.monotonic() - started, 6),
+                "finish_reason": finish_reason,
+                "response_chars": len(response),
+                "event_count": len(getattr(result, "events", [])),
+                "notification_count": len(getattr(result, "notifications", [])),
+            },
+        )
         if not response.strip():
             detail = _extract_turn_error(getattr(result, "events", []), getattr(result, "notifications", []))
             if detail:
@@ -475,6 +519,9 @@ class ScriptedGenerationDriver:
 
     def configure_run(self, *, run_dir: Path) -> None:
         del run_dir
+
+    def trace_summary(self) -> dict[str, Any]:
+        return {}
 
     def generate_artifacts(
         self,

@@ -20,6 +20,7 @@ from .models import Capability, FuzzRunRequest, Language, ModelProfile, RunEvent
 from .redaction import redact
 from .report import REPORT_FILENAME, VALIDATION_FILENAME
 from .storage import ArtifactStore, RunLockedError, create_run_id
+from .trace import DshTraceTerminalFormatter
 from .workflow import RunController
 
 app = typer.Typer(
@@ -99,7 +100,7 @@ def run(
         help="root directory for this run's products (default: <workspace>/work)",
     ),
     verbose: bool = typer.Option(False, "--verbose", help="include event payloads in live progress output"),
-    debug: bool = typer.Option(False, "--debug", help="stream redacted DSH/model trace events"),
+    debug: bool = typer.Option(False, "--debug", help="stream a readable redacted DSH/model trace summary"),
     workspace: Path | None = typer.Option(None, "--workspace", help="workspace root (default: cwd)"),
 ) -> None:
     """Run the full four-phase workflow for one target function."""
@@ -171,7 +172,7 @@ def resume(
         help="root directory where the run's products live (default: <workspace>/work)",
     ),
     verbose: bool = typer.Option(False, "--verbose", help="include event payloads in live progress output"),
-    debug: bool = typer.Option(False, "--debug", help="stream redacted DSH/model trace events"),
+    debug: bool = typer.Option(False, "--debug", help="stream a readable redacted DSH/model trace summary"),
     workspace: Path | None = typer.Option(None, "--workspace"),
 ) -> None:
     """Resume a run from its persisted checkpoint."""
@@ -335,7 +336,7 @@ def evaluate(
         help="root directory for run products and the results file (default: <workspace>/work)",
     ),
     workspace: Path | None = typer.Option(None, "--workspace"),
-    debug: bool = typer.Option(False, "--debug", help="stream redacted DSH/model trace events"),
+    debug: bool = typer.Option(False, "--debug", help="stream a readable redacted DSH/model trace summary"),
 ) -> None:
     """Run a suite of entries several times and summarize outcomes."""
     ws = _workspace_root(workspace)
@@ -420,6 +421,14 @@ def evaluate(
                     "generation_loops_used": state.generation_loop,
                     "first_compile_success": metrics.get("first_compile_success"),
                     "time_to_bug_seconds": metrics.get("time_to_bug_seconds"),
+                    "format_retries": metrics.get("format_retries", 0),
+                    "dsh_trace_path": metrics.get("dsh_trace_path"),
+                    "dsh_trace_events": metrics.get("dsh_trace_events", 0),
+                    "model_calls": metrics.get("model_calls", 0),
+                    "model_call_seconds": metrics.get("model_call_seconds", 0.0),
+                    "estimated_input_tokens": metrics.get("estimated_input_tokens", 0),
+                    "model_response_chars": metrics.get("model_response_chars", 0),
+                    "tool_calls": metrics.get("tool_calls", 0),
                 }
             )
 
@@ -434,6 +443,7 @@ def evaluate(
         "duration_seconds": round(time.monotonic() - started, 3),
         "results": results,
         "summary": summary,
+        "observability": _evaluate_observability(results),
     }
     if output is not None:
         out_root = output.resolve()
@@ -445,6 +455,46 @@ def evaluate(
     for function, counts in summary.items():
         typer.echo(f"[evaluate] {function}: {counts}")
     typer.echo(f"[evaluate] results written to {out_path}")
+
+
+def _evaluate_observability(results: list[dict[str, Any]]) -> dict[str, dict[str, int | float]]:
+    aggregates: dict[str, dict[str, int | float]] = {}
+    for result in results:
+        function = str(result["function"])
+        bucket = aggregates.setdefault(
+            function,
+            {
+                "runs": 0,
+                "trace_events": 0,
+                "model_calls": 0,
+                "model_call_seconds": 0.0,
+                "estimated_input_tokens": 0,
+                "model_response_chars": 0,
+                "tool_calls": 0,
+                "format_retries": 0,
+            },
+        )
+        bucket["runs"] = int(bucket["runs"]) + 1
+        for field in (
+            "dsh_trace_events",
+            "model_calls",
+            "estimated_input_tokens",
+            "model_response_chars",
+            "tool_calls",
+            "format_retries",
+        ):
+            target = "trace_events" if field == "dsh_trace_events" else field
+            value = result.get(field)
+            if isinstance(value, int) and not isinstance(value, bool):
+                bucket[target] = int(bucket[target]) + value
+        duration = result.get("model_call_seconds")
+        if isinstance(duration, (int, float)) and not isinstance(duration, bool):
+            bucket["model_call_seconds"] = round(float(bucket["model_call_seconds"]) + float(duration), 6)
+    for bucket in aggregates.values():
+        runs = int(bucket["runs"])
+        bucket["average_model_call_seconds"] = round(float(bucket["model_call_seconds"]) / runs, 6)
+        bucket["average_estimated_input_tokens"] = round(int(bucket["estimated_input_tokens"]) / runs, 2)
+    return aggregates
 
 
 def _echo_state(state: RunState, *, run_dir: Path) -> None:
@@ -570,16 +620,13 @@ def _event_printer(verbose: bool) -> Callable[[RunEvent], None]:
 
 
 def _dsh_trace_printer(workspace_root: Path) -> Callable[[str, dict[str, Any]], None]:
-    """Return a callback that streams one redacted DSH notification per line."""
+    """Return a callback that renders a filtered, redacted DSH progress view."""
+
+    formatter = DshTraceTerminalFormatter()
 
     def _print(method: str, payload: dict[str, Any]) -> None:
-        trace = json.dumps(
-            {"method": method, "payload": payload},
-            ensure_ascii=False,
-            default=str,
-            separators=(",", ":"),
-        )
-        typer.echo(f"[goaloop][debug][dsh] {redact(trace, workspace_root)}")
+        for line in formatter.format(method, payload):
+            typer.echo(f"[goaloop][debug][dsh] {redact(line, workspace_root)}")
 
     return _print
 

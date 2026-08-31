@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from ..crash import analyze_crash
 from ..driver import PROMPT_VERSION
@@ -202,7 +202,22 @@ class ReportMixin:
             first_compile_success=self._first_compile_success,
             time_to_bug_seconds=self._time_to_bug,
         )
-        metrics = metrics.model_copy(update={"loop_hashes": self._loop_hashes})
+        trace = self.driver.trace_summary()
+        raw_model_calls = trace.get("model_calls")
+        model_calls = cast(dict[str, object], raw_model_calls) if isinstance(raw_model_calls, dict) else {}
+        metrics = metrics.model_copy(
+            update={
+                "loop_hashes": self._loop_hashes,
+                "dsh_trace_path": trace.get("trace_file") if trace else None,
+                "dsh_trace_summary_path": "logs/dsh-trace-summary.json" if trace else None,
+                "dsh_trace_events": _metric_int(trace.get("event_count")),
+                "model_calls": _metric_int(model_calls.get("started")),
+                "model_call_seconds": _metric_float(model_calls.get("duration_seconds")),
+                "estimated_input_tokens": _metric_int(model_calls.get("estimated_input_tokens")),
+                "model_response_chars": _metric_int(model_calls.get("response_chars")),
+                "tool_calls": _metric_int(trace.get("tool_calls")),
+            }
+        )
         self.store.write_json(self.store.run_dir / "research-metrics.json", metrics)
 
     def _last_candidate_dir(self: ControllerState) -> Path | None:
@@ -239,3 +254,13 @@ class ReportMixin:
             terminal_status=TerminalStatus.FAILED,
             reason="preprocess result unavailable",
         )
+
+
+def _metric_int(value: object) -> int:
+    return value if isinstance(value, int) and not isinstance(value, bool) else 0
+
+
+def _metric_float(value: object) -> float:
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
+    return 0.0

@@ -397,12 +397,29 @@ class TestDeepSeekHarnessDriver:
 
         driver.generate_artifacts(goal=_goal(), preprocess=_preprocess(), feedback=None)
 
-        assert traces == [
-            (
-                "session.event",
-                {"sessionId": "run-live-g01", "event": {"type": "assistant/message"}},
-            )
+        assert traces[0][0] == "goaloop.model_call.started"
+        assert (
+            "session.event",
+            {"sessionId": "run-live-g01", "event": {"type": "assistant/message"}},
+        ) in traces
+        assert traces[-1][0] == "goaloop.model_call.completed"
+
+    def test_persists_raw_sdk_trace_without_debug_callback(self, tmp_path) -> None:
+        driver = _real_driver()
+        run_dir = tmp_path / "run"
+        driver.configure_run(run_dir=run_dir)
+        driver._harness = FakeHarness([json.dumps(_live_payload())])
+
+        driver.generate_artifacts(goal=_goal(), preprocess=_preprocess(), feedback=None)
+
+        trace_path = run_dir / "logs" / "dsh-trace.jsonl"
+        records = [json.loads(line) for line in trace_path.read_text(encoding="utf-8").splitlines()]
+        assert [record["method"] for record in records] == [
+            "goaloop.model_call.started",
+            "session.event",
+            "goaloop.model_call.completed",
         ]
+        assert driver.trace_summary()["model_calls"]["completed"] == 1
 
     def test_per_loop_session_isolation(self) -> None:
         # Each generation loop must run in its own session so the runtime does
