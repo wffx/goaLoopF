@@ -96,11 +96,9 @@ class FuzzRunRequest(Contract):
     # Optional directory of seed inputs copied into the run's corpus before
     # fuzzing, so successive runs can reuse a previous run's corpus.
     seed_corpus: Path | None = None
-    # Optional CMake project directory (must contain CMakeLists.txt). When set,
-    # the controller configures and builds the project inside that directory
-    # (out-of-source to <build_dir>/goaloop-build, with sanitizer/coverage
-    # instrumentation) and links the produced static library into the harness
-    # instead of compiling target sources from model-declared BuildPlan.
+    # Optional trusted build directory. When set, the model only generates
+    # harness.c; the controller copies it to <build_dir>/src/harness.c and runs
+    # <build_dir>/build.sh. The script must announce its executable in output.
     build_dir: Path | None = None
 
 
@@ -110,7 +108,7 @@ class ToolchainSettings(Contract):
     llvm_profdata: str = "llvm-profdata"
     llvm_cov: str = "llvm-cov"
     bubblewrap: str = "bwrap"
-    cmake: str = "cmake"
+    shell: str = "sh"
 
 
 class SandboxSettings(Contract):
@@ -125,28 +123,6 @@ class ResourceLimits(Contract):
     process_count: Annotated[int, Field(ge=1, le=4096)] = 16
     max_commands: Annotated[int, Field(ge=3, le=100)] = 16
     max_output_bytes: Annotated[int, Field(ge=4096, le=16_777_216)] = 1_048_576
-
-
-class BuildSettings(Contract):
-    """CMake build-directory mode: configure/build an existing CMake project.
-
-    The build runs inside the user-provided build directory (out-of-source to
-    ``<build_dir>/goaloop-build``) with sanitizer+coverage instrumentation
-    injected via CMAKE_C_FLAGS / CMAKE_CXX_FLAGS, so the produced static
-    library keeps source-level coverage attribution. The controller never
-    executes model-generated scripts.
-    """
-
-    target: str | None = None
-    # Static library path relative to <build_dir>/goaloop-build. When unset,
-    # the controller auto-discovers the first *.a (declare it when the project
-    # produces more than one static library).
-    library: str | None = None
-    # Extra include directories relative to the build_dir, prepended for the
-    # harness compile.
-    include_dirs: list[str] = Field(default_factory=list)
-    # Extra configure flags, e.g. ["-DCMAKE_BUILD_TYPE=Release"].
-    flags: list[str] = Field(default_factory=list)
 
 
 class CoverageDecisionPolicy(Contract):
@@ -166,7 +142,6 @@ class ValidationProfile(Contract):
     sandbox: SandboxSettings = Field(default_factory=SandboxSettings)
     resources: ResourceLimits = Field(default_factory=ResourceLimits)
     coverage: CoverageDecisionPolicy = Field(default_factory=CoverageDecisionPolicy)
-    build: BuildSettings = Field(default_factory=BuildSettings)
     # Compiler -D definitions the controller always appends (e.g. project
     # build knowledge like HAVE_WRITEV for old c-ares). User-reviewed profile
     # content, trusted and not part of the model-generated BuildPlan.
@@ -272,10 +247,9 @@ class PreprocessResult(Contract):
     capability_report: CapabilityReport
     terminal_status: TerminalStatus | None = None
     reason: str | None = None
-    # Resolved CMake build directory when --build-dir mode is used. In that
-    # mode the controller builds the project itself and build-file contents
-    # are excluded from contexts, so this path is the only build info the
-    # model receives (it cannot read files anyway).
+    # Resolved trusted build directory when --build-dir mode is used. Build
+    # files stay out of contexts; the model only receives this path and emits
+    # harness.c while the controller invokes the pre-existing build.sh.
     build_dir: Path | None = None
 
     @model_validator(mode="before")
@@ -396,7 +370,7 @@ class GeneratedArtifactSet(Contract):
     candidate_ready: Literal[True] = True
     summary: str
     endpoint_plan: EndpointPlan
-    files: Annotated[list[GeneratedFile], Field(min_length=4, max_length=64)]
+    files: Annotated[list[GeneratedFile], Field(min_length=1, max_length=64)]
     format_retry: Annotated[int, Field(ge=0, le=1)] = 0
 
     @model_validator(mode="after")
@@ -451,6 +425,7 @@ class HarnessExecutionResult(Contract):
     generation_loop: int
     disposition: ExecutionDisposition
     compile_result: ProcessResult
+    fuzzer_binary: Path | None = None
     fuzz_result: ProcessResult | None = None
     coverage: CoverageMetrics = Field(default_factory=CoverageMetrics)
     sanitizer_kind: str | None = None
@@ -513,6 +488,8 @@ class RunContext(Contract):
     run_dir: Path
     source_root: Path
     candidate_dir: Path | None = None
+    build_dir: Path | None = None
+    executable_dir: Path | None = None
     binary_name: str = "fuzzer"
 
 

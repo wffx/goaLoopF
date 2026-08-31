@@ -84,7 +84,7 @@ def run(
     build_dir: Path | None = typer.Option(
         None,
         "--build-dir",
-        help="CMake project directory (must contain CMakeLists.txt); builds inside it and links the static library",
+        help="trusted build directory containing build.sh and src/; copies harness.c then runs build.sh",
     ),
     model_name: str | None = typer.Option(
         None, "--model-name", help="override model id (e.g. gpt-4o, deepseek-v4-pro)"
@@ -718,11 +718,16 @@ def _progress_line(kind: str, payload: dict[str, object]) -> str | None:
         "execution:checkpoint_resumed": (
             f"step=checkpoint_resumed{loop_part} stage={payload.get('stage')}"
         ),
-        "execution:cmake_configure_started": f"step=cmake_configure_started{loop_part}",
-        "execution:cmake_configure": f"step=cmake_configure_completed{loop_part} exit={payload.get('exit_code')}",
-        "execution:cmake_build_started": f"step=cmake_build_started{loop_part}",
-        "execution:cmake_build": f"step=cmake_build_completed{loop_part} exit={payload.get('exit_code')}",
-        "execution:cmake_library": f"step=cmake_library_selected{loop_part}",
+        "execution:build_harness_copied": f"step=build_harness_copied{loop_part}",
+        "execution:build_script_started": (
+            f"step=build_script_started{loop_part} command={_shell_command(payload.get('argv'))}"
+        ),
+        "execution:build_script": (
+            f"step=build_script_completed{loop_part} exit={payload.get('exit_code')}"
+        ),
+        "execution:build_binary": (
+            f"step=build_binary_discovered{loop_part} binary={payload.get('binary')}"
+        ),
         "execution:compile_started": f"step=compile_started{loop_part}",
         "execution:compile": f"step=compile_completed{loop_part} exit={payload.get('exit_code')}",
         "execution:fuzz_started": f"step=fuzz_started{loop_part} budget={payload.get('seconds')}s",

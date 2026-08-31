@@ -230,6 +230,18 @@ class TestPrompt:
         assert '"type":"krepo_query"' in prompt
         assert "non-function dependency" in prompt
 
+    def test_build_dir_prompt_requires_only_harness(self) -> None:
+        preprocess = _preprocess().model_copy(update={"build_dir": "/tmp/ws/repos/safe"})
+        prompt = build_generation_prompt(
+            goal=_goal(),
+            preprocess=preprocess,
+            feedback=None,
+            expected_loop=1,
+        )
+        assert "files must contain exactly one entry whose path is harness.c" in prompt
+        assert "Do not generate Makefile" in prompt
+        assert "Never invent build commands" in prompt
+
     def test_retry_prompt_carries_error(self) -> None:
         prompt = build_format_retry_prompt("base", ValueError("bad json"), expected_loop=2)
         assert "bad json" in prompt

@@ -475,6 +475,7 @@ def test_build_dir_mode_excludes_build_files(workspace_root: Path, default_profi
     )
     _write(src, "include/target.h", "int cmake_parse(const uint8_t *, size_t);\n")
     _write(src, "CMakeLists.txt", "add_library(cmake_target STATIC src/target.c)\n")
+    _write(src, "build.sh", "#!/bin/sh\nexit 0\n")
     result = preprocess_request(
         workspace_root,
         "run-build-dir",
@@ -488,7 +489,7 @@ def test_build_dir_mode_excludes_build_files(workspace_root: Path, default_profi
     assert "src/target.c" in paths
     assert "include/target.h" not in paths
     assert "CMakeLists.txt" not in paths
-    assert not any(ctx.path in {"CMakeLists.txt", "Makefile"} for ctx in result.contexts)
+    assert not any(ctx.path in {"CMakeLists.txt", "Makefile", "build.sh"} for ctx in result.contexts)
 
 
 def test_no_build_dir_still_excludes_build_files(workspace_root: Path, default_profile: object) -> None:

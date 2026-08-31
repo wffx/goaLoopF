@@ -67,6 +67,11 @@ class ReportMixin:
         assert self.state is not None and self.goal is not None
         loop = self.state.generation_loop
         candidate_dir = self._last_candidate_dir()
+        compiled_harness_dir = (
+            self.preprocess.build_dir / "src"
+            if self.preprocess.build_dir is not None
+            else candidate_dir
+        )
         fuzzer_binary = self._compiled_binary(self.last_execution) or (
             self.backend.collect(
                 RunContext(
@@ -75,6 +80,7 @@ class ReportMixin:
                     run_dir=self.store.run_dir,
                     source_root=self.preprocess.source_root,
                     candidate_dir=candidate_dir,
+                    build_dir=self.preprocess.build_dir,
                 )
             ).fuzzer_binary
         )
@@ -82,13 +88,24 @@ class ReportMixin:
         if fuzzer_binary is None:
             self._terminate(TerminalStatus.BLOCKED, "crash candidate has no fuzzer binary to analyze")
             return
+        self.backend.prepare(
+            RunContext(
+                run_id=self.state.run_id,
+                project_name=self.state.project_name,
+                run_dir=self.store.run_dir,
+                source_root=self.preprocess.source_root,
+                candidate_dir=candidate_dir,
+                build_dir=self.preprocess.build_dir,
+                executable_dir=fuzzer_binary.parent,
+            )
+        )
         fuzz_output = ""
         if self.last_execution.fuzz_result is not None:
             fuzz_output = f"{self.last_execution.fuzz_result.stdout}\n{self.last_execution.fuzz_result.stderr}"
         self._event("crash:analysis_started", {"loop": loop, "artifacts": len(crash_files)})
         self.last_crash_analysis = analyze_crash(
             source_root=self.preprocess.source_root,
-            candidate_dir=candidate_dir or self.store.run_dir,
+            candidate_dir=compiled_harness_dir or self.store.run_dir,
             run_dir=self.store.run_dir,
             fuzzer_binary=fuzzer_binary,
             crash_files=crash_files,

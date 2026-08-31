@@ -62,11 +62,10 @@ goaloop run --repo /path/to/any/project --source src/parser.c --function <symbol
 `default_defines` / `default_include_dirs`），见 [profiles/c-ares.toml](profiles/c-ares.toml)
 示例与 [doc/README.md](doc/README.md)。
 
-**CMake 构建目录模式**：项目有现成 CMake 工程时，用 `--build-dir` 指向含
-`CMakeLists.txt` 的目录。控制器在该目录内（out-of-source 到
-`<build-dir>/goaloop-build`）用 clang + ASan/UBSan/覆盖插桩配置并构建，产出
-的插桩静态库直接链接进 harness——模型只需写 harness，不再猜构建参数，显著
-节省 token：
+**构建目录模式**：用 `--build-dir` 指向含 `build.sh` 和 `src/` 的可信目录。
+模型只生成 `harness.c`；控制器将其复制到 `<build-dir>/src/harness.c`，直接执行
+`<build-dir>/build.sh`，并从脚本输出识别实际可执行文件。建议脚本最后输出
+`GOALOOP_FUZZER=<相对或绝对路径>`：
 
 ```bash
 goaloop run --repo repos/<project> --source src/target.c --function <symbol> \

@@ -33,7 +33,7 @@ goaloop run --repo repos/<project> --source <dir-or-file> --function <symbol>
 | `--max-context-kb` | `96` | 8–1024，注入每个生成提示词的源码上下文预算（KiB）。这是输入 token 的最大来源：降低它直接压缩每次模型输入（96 KiB ≈ 25–32K token） |
 | `--max-input-tokens` | Profile 值 | 输入窗口守卫：生成前估算提示词 token，超过该值 90% 时快速失败并给出可操作报错，而不是等端点返回晦涩的“输入超限”错误。默认取模型 Profile 的 `max_input_tokens` |
 | `--seed-corpus` | — | 可选：目录，其中的种子输入复制进 run corpus（跨 run 复用上一轮语料） |
-| `--build-dir` | — | 可选：CMake 工程目录（含 `CMakeLists.txt`）。控制器在该目录内构建并链接插桩静态库，模型不再猜构建参数 |
+| `--build-dir` | — | 可选：可信构建目录（含 `build.sh` 和 `src/`）。控制器复制模型生成的 `harness.c` 后直接运行脚本，并从输出识别可执行文件 |
 | `--model-name` | Profile 值 | 覆盖模型 ID（如 `gpt-4o`、`deepseek-v4-pro`） |
 | `--base-url` | Profile 值 | 覆盖模型端点（deepseek 适配器生效） |
 | `--api-key` | 环境变量 | 覆盖模型凭据（注入 Profile 的 `api_key_env`，仅本次进程生效，不落盘） |
@@ -286,36 +286,36 @@ goaloop run --repo repos/<project> --source src/target.c --function <symbol> --m
 goaloop run --repo repos/<project> --source src/target.c --function <symbol> --max-input-tokens 40000
 ```
 
-## CMake 构建目录模式（可选）
+## 构建目录模式（可选）
 
-用户提供现成 CMake 工程时，`--build-dir <dir>`（目录下固定存放
-`CMakeLists.txt`）让控制器在该目录内完成构建：
+`--build-dir <dir>` 要求目录下存在可信的 `build.sh` 和 `src/`：
 
 ```bash
 goaloop run --repo repos/<project> --source src/target.c --function <symbol> --build-dir repos/<project>
 ```
 
-流程（均在 `<build-dir>` 内完成，out-of-source）：
+流程：
 
-1. `cmake -S <build-dir> -B <build-dir>/goaloop-build -DCMAKE_C_COMPILER=clang
-   -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_C_FLAGS="-fsanitize=address,undefined
-   -fprofile-instr-generate -fcoverage-mapping"`（配置，插桩保证覆盖归因）
-2. `cmake --build <build-dir>/goaloop-build`
-3. harness 编译链接产物：`clang -fsanitize=fuzzer,address,undefined
-   <harness.c> -I<build-dir> <build-dir>/goaloop-build/libxxx.a -o fuzzer`
+1. build-dir 专用生成契约只允许模型返回一个 `harness.c`，禁止 Makefile、脚本、
+   stub 或额外源文件。
+2. 控制器覆盖复制到 `<build-dir>/src/harness.c`。
+3. 控制器以 `<build-dir>` 为工作目录执行 `sh <build-dir>/build.sh`。
+4. 控制器解析构建输出中的 `GOALOOP_FUZZER=<path>`、`executable:`、`binary:` 或
+   编译命令 `-o <path>`，只接受实际存在且可执行的文件。
+5. 使用识别出的可执行文件直接 fuzz 和采集覆盖率。
 
 要点：
 
-- 模型生成的 `BuildPlan.target_sources` 在构建模式下被忽略——产品源码来自库，
-  模型只写 harness，显著降低 token 消耗。
+- `BuildPlan` 的 sources/includes/flags/libraries 在此模式必须全部为空，构建知识只在
+  用户提供的 `build.sh` 中维护。
 - **构建文件内容不再进入上下文**：`preprocess.json` 的 `contexts` 不含
-  CMakeLists/Makefile 内容，只通过 `PreprocessResult.build_dir` 暴露解析后的
+  CMakeLists/Makefile/build.sh 内容，只通过 `PreprocessResult.build_dir` 暴露解析后的
   工程路径——构建知识完全由 `--build-dir` 工程承载，模型无需（也无法）猜测。
-- 库产物查找：`profiles/*.toml` 的 `[build] library`（相对
-  `goaloop-build`）优先，否则自动取第一个 `*.a`（多库工程请显式声明）；
-  `[build] include_dirs`（相对 build-dir）与 `[build] flags` 可附加。
-- `CMakeLists.txt` 不被修改；构建目录内的 `goaloop-build/` 为控制器构建输出。
-- 需要系统已装 `cmake`；**要求 `sandbox.required = false`**（cmake 需写构建目录）。
+- `build.sh` 应自行添加 libFuzzer、ASan/UBSan 和 LLVM coverage 插桩参数，并在成功后
+  输出 `GOALOOP_FUZZER=<path>`；构建标准输出完整保存到 run 的 `logs/`。
+- 可执行文件可以位于其他构建输出目录；目录内普通日志 token 不会被当成外部产物，
+  外部路径必须通过明确标记或 `-o` 输出声明。
+- `build.sh` 是用户提供的可信脚本；**要求 `sandbox.required = false`**。
 
 ## 沙箱选项（可选）
 

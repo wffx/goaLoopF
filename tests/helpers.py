@@ -104,3 +104,35 @@ def make_artifact_payload(
         },
         "files": files,
     }
+
+
+def make_build_dir_artifact_payload(function: str, *, harness_source: str | None = None) -> dict[str, Any]:
+    """Build the one-file artifact contract used with --build-dir."""
+    harness = harness_source or HARNESS_TEMPLATE.format(function=function)
+    return {
+        "summary": "build-directory harness",
+        "candidate_ready": True,
+        "format_retry": 0,
+        "endpoint_plan": {
+            "function": function,
+            "signature": f"int {function}(const uint8_t *data, size_t size)",
+            "location": "src/target.c",
+            "language": "c",
+            "input_model": "raw bytes",
+            "lifecycle": [],
+            "build": {
+                "compiler": "clang",
+                "harness_file": "harness.c",
+                "target_sources": [],
+                "include_dirs": [],
+                "defines": [],
+                "cflags": [],
+                "ldflags": [],
+                "libraries": [],
+                "binary_name": "fuzzer",
+            },
+        },
+        "files": [
+            {"path": "harness.c", "content": harness, "purpose": "libFuzzer harness source"}
+        ],
+    }

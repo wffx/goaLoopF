@@ -20,12 +20,13 @@ from goaloop.validation import (
     assemble_fuzz_request,
     decide_generation,
     detect_sanitizer,
+    find_build_output_binary,
     make_execution_result,
     parse_libfuzzer_metrics,
     validate_generated_artifacts,
 )
 
-from .helpers import make_artifact_payload
+from .helpers import make_artifact_payload, make_build_dir_artifact_payload
 
 FUZZER_STATS_SAMPLE = """INFO: Running with entropic power schedule (0xFF, 100).
 #2\tINITED cov: 4 ft: 5 corp: 1/1b exec/s: 0 rss: 25Mb
@@ -100,6 +101,48 @@ class TestArtifactPolicy:
         with pytest.raises(ArtifactPolicyError, match="not allowed by profile"):
             validate_generated_artifacts(artifacts, ValidationProfile(name="default"))
 
+    def test_build_dir_accepts_only_harness(self, workspace_root: Path) -> None:
+        artifacts = GeneratedArtifactSet.model_validate(
+            {
+                "run_id": "run-build",
+                "generation_loop": 1,
+                **make_build_dir_artifact_payload("safe_parse"),
+            }
+        )
+        validate_generated_artifacts(
+            artifacts,
+            ValidationProfile(name="default"),
+            build_dir_mode=True,
+        )
+
+    def test_build_dir_rejects_extra_stub(self, workspace_root: Path) -> None:
+        payload = make_build_dir_artifact_payload("safe_parse")
+        payload["files"].append(
+            {"path": "stub.c", "content": "int missing(void) { return 0; }", "purpose": "stub"}
+        )
+        artifacts = GeneratedArtifactSet.model_validate(
+            {"run_id": "run-build", "generation_loop": 1, **payload}
+        )
+        with pytest.raises(ArtifactPolicyError, match="exactly one file"):
+            validate_generated_artifacts(
+                artifacts,
+                ValidationProfile(name="default"),
+                build_dir_mode=True,
+            )
+
+    def test_build_dir_rejects_model_build_flags(self, workspace_root: Path) -> None:
+        payload = make_build_dir_artifact_payload("safe_parse")
+        payload["endpoint_plan"]["build"]["cflags"] = ["-g"]
+        artifacts = GeneratedArtifactSet.model_validate(
+            {"run_id": "run-build", "generation_loop": 1, **payload}
+        )
+        with pytest.raises(ArtifactPolicyError, match="arrays must be empty"):
+            validate_generated_artifacts(
+                artifacts,
+                ValidationProfile(name="default"),
+                build_dir_mode=True,
+            )
+
 
 class TestCompileAssembly:
     def test_argv_shape(self, workspace_root: Path) -> None:
@@ -120,6 +163,32 @@ class TestCompileAssembly:
         assert "-fcoverage-mapping" in request.argv
         assert request.argv[-2:] == ["-o", str(candidate / "fuzzer")]
         assert any(str(source_root / "src" / "safe.c") == item for item in request.argv)
+
+
+class TestBuildOutputDiscovery:
+    def test_marker_finds_executable_in_nested_directory(self, tmp_path: Path) -> None:
+        binary = tmp_path / "out" / "fuzzer"
+        binary.parent.mkdir()
+        binary.write_text("binary", encoding="utf-8")
+        binary.chmod(0o755)
+        assert find_build_output_binary("GOALOOP_FUZZER=out/fuzzer\n", tmp_path) == binary
+
+    def test_compiler_output_is_supported(self, tmp_path: Path) -> None:
+        binary = tmp_path / "bin" / "target fuzzer"
+        binary.parent.mkdir()
+        binary.write_text("binary", encoding="utf-8")
+        binary.chmod(0o755)
+        output = "clang src/harness.c -o 'bin/target fuzzer'\n"
+        assert find_build_output_binary(output, tmp_path) == binary
+
+    def test_explicit_marker_accepts_executable_outside_build_dir(self, tmp_path: Path) -> None:
+        outside = tmp_path.parent / "outside-fuzzer"
+        outside.write_text("binary", encoding="utf-8")
+        outside.chmod(0o755)
+        assert find_build_output_binary(f"GOALOOP_FUZZER={outside}\n", tmp_path) == outside
+
+    def test_generic_external_token_is_not_treated_as_output(self, tmp_path: Path) -> None:
+        assert find_build_output_binary("checking /bin/sh\n", tmp_path) is None
 
 
 class TestFuzzAssembly:

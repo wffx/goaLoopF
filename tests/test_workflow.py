@@ -33,6 +33,7 @@ from .helpers import (
     HARNESS_CRASH_TEMPLATE,
     NO_REACH_TEMPLATE,
     make_artifact_payload,
+    make_build_dir_artifact_payload,
 )
 
 FUZZ_SECONDS = 2
@@ -533,11 +534,11 @@ class TestOnEvent:
 
 
 class TestBuildDirMode:
-    """Build-directory mode: harness links the user's CMake-built static library."""
+    """Build-directory mode delegates compilation to the trusted build.sh."""
 
     def test_build_dir_mode_harness_verified(self, workspace_root: Path) -> None:
         build_dir = workspace_root / "repos" / "cmake-proj"
-        # The CMake fixture is not part of the workspace_root copy; copy it in.
+        # This fixture is not part of the default workspace_root copy.
         import shutil
 
         shutil.rmtree(build_dir, ignore_errors=True)
@@ -545,12 +546,7 @@ class TestBuildDirMode:
             Path(__file__).parent / "fixtures" / "repos" / "cmake-proj",
             build_dir,
         )
-        payload = make_artifact_payload(
-            "cmake-proj",
-            "cmake_parse",
-            harness_file="harness_cmake.c",
-            target_sources=[],  # product sources come from the built library
-        )
+        payload = make_build_dir_artifact_payload("cmake_parse")
         request = _request(workspace_root, source="repos/cmake-proj", function="cmake_parse", loops=2)
         request.build_dir = build_dir
         validation = ValidationProfile(name="default", sandbox={"required": False})
@@ -562,24 +558,28 @@ class TestBuildDirMode:
             profile=validation,
             driver=driver,
             backend=backend,
-            run_id="run-cmake-1",
+            run_id="run-build-dir-1",
         )
         state = controller.run()
         controller.close()
         assert state.terminal_status is TerminalStatus.HARNESS_VERIFIED
         assert state.generation_loop == 1
-        run_dir = ArtifactStore(workspace_root, "cmake-proj", "run-cmake-1").run_dir
+        run_dir = ArtifactStore(workspace_root, "cmake-proj", "run-build-dir-1").run_dir
         events = (run_dir / "events.jsonl").read_text(encoding="utf-8")
-        assert "execution:cmake_configure" in events
-        assert "execution:cmake_build" in events
-        assert "execution:cmake_library" in events
+        assert "execution:build_harness_copied" in events
+        assert "execution:build_script" in events
+        assert "execution:build_binary" in events
         execution = json.loads((run_dir / "executions" / "loop-01" / "execution.json").read_text())
         assert execution["coverage"]["target_function_hit"] is True
-        assert (build_dir / "goaloop-build" / "libcmake_target.a").is_file()
+        assert execution["fuzzer_binary"] == str(run_dir / "build-output" / "cmake_fuzzer")
+        assert (build_dir / "src" / "harness.c").is_file()
+        assert (run_dir / "build-output" / "cmake_fuzzer").is_file()
+        assert "GOALOOP_FUZZER=" in (run_dir / "logs" / "build-loop-01.stdout.log").read_text()
 
-    def test_build_dir_requires_cmakelists(self, workspace_root: Path) -> None:
-        bad_dir = workspace_root / "repos" / "safe" / "no-cmake"
+    def test_build_dir_requires_build_script(self, workspace_root: Path) -> None:
+        bad_dir = workspace_root / "repos" / "safe" / "no-build-script"
         bad_dir.mkdir(exist_ok=True)
+        (bad_dir / "src").mkdir()
         request = _request(workspace_root, source="repos/safe", function="safe_parse")
         request.build_dir = bad_dir
         validation = ValidationProfile(name="default", sandbox={"required": False})
@@ -590,12 +590,12 @@ class TestBuildDirMode:
             profile=validation,
             driver=driver,
             backend=LocalLinuxBackend(validation),
-            run_id="run-cmake-bad",
+            run_id="run-build-dir-bad",
         )
         state = controller.run()
         controller.close()
         assert state.terminal_status is TerminalStatus.NEEDS_INPUT
-        assert "CMakeLists.txt" in _report_text(workspace_root, "run-cmake-bad")
+        assert "build.sh" in _report_text(workspace_root, "run-build-dir-bad")
 
 
 class TestResumeRecovery:

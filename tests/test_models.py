@@ -119,7 +119,7 @@ class TestGeneratedArtifactSet:
                 }
             )
 
-    def test_too_few_files_rejected(self) -> None:
+    def test_empty_files_rejected(self) -> None:
         with pytest.raises(ValidationError):
             GeneratedArtifactSet.model_validate(
                 {
@@ -127,7 +127,7 @@ class TestGeneratedArtifactSet:
                     "generation_loop": 1,
                     "summary": "ok",
                     "endpoint_plan": self._plan(),
-                    "files": self._valid_files()[:2],
+                    "files": [],
                 }
             )
 

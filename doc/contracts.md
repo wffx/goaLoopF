@@ -24,7 +24,7 @@
 |---|---|---|
 | `GenerationGoal` | 控制器侧目标追踪 | `current_loop` ≤ `max_generation_loops`；`completed` 由控制器设置 |
 | `EndpointPlan` | 函数签名、生命周期、构建依赖 | `location` 必须相对路径；`language` 限 `c`/`cpp` |
-| `BuildPlan` | 编译计划 | `harness_file`/`binary_name` 必须相对路径；`cflags`/`ldflags` 禁止 shell 元字符（`\x00`、`\n`、`;`、`&&`、`$(`等）；`libraries` 必须在 `allowed_libraries` 内 |
+| `BuildPlan` | 编译计划 | 标准模式校验相对路径、flags 和 libraries；build-dir 模式要求 `harness_file=harness.c` 且所有构建数组为空 |
 | `GeneratedFile` | 单个生成文件 | `path` 必须相对；`content` ≤ 1,000,000 字符 |
 | `GeneratedArtifactSet` | 模型响应（每轮） | `files` 4–64 个且路径唯一；`candidate_ready` 必须 `True`；必须携带 `schema_version`/`run_id`/`phase`/`generation_loop` |
 | `GenerationFeedback` | 反馈给模型的执行证据 | `category`、`summary`、`log_excerpt`（已脱敏）、`artifact_hashes` |
@@ -83,7 +83,9 @@ session 回填结果；每轮最多 3 个查询回合、合计 6 个查询。
 
 - 所有路径字段禁止 `\\`、`..`、`/` 开头（`_validate_relative_path`）
 - `BuildPlan` 的 `cflags`/`ldflags` 禁止 shell 元字符（`\x00`、`\n`、`\r`、`;`、`&&`、`\|\|`、`` ` ``、`$(`、`>`、`<`）
-- `GeneratedArtifactSet` 必须包含 `harness_file` 的源文件 + `Makefile`、`build.sh`、`endpoint.json`、`README.fuzz.md`
+- 标准模式的 `GeneratedArtifactSet` 必须包含 harness + `Makefile`、`build.sh`、`endpoint.json`、`README.fuzz.md`
+- build-dir 模式必须且只能包含 `harness.c`；控制器复制到 `<build-dir>/src/harness.c` 后执行用户预置 `build.sh`
+- `build.sh` 输出识别优先使用 `GOALOOP_FUZZER=<path>`，只接受存在且可执行的产物；外部输出目录必须显式声明
 - `GenerationDecision`：`completes_goal` 仅当 `ACCEPTED`；`NEEDS_REGENERATION` 必须带 `feedback`
 - `PreprocessResult`：`ready` 与 `terminal_status` 互斥
 - `ExecutionLease.authorize()`：同时支持精确名称匹配和 `shutil.which` 解析 + 目录级授权

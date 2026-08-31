@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -16,17 +17,17 @@ from ..models import (
     HarnessExecutionResult,
     LoopStage,
     Phase,
+    ProcessRequest,
     ProcessResult,
     RunContext,
     TerminalStatus,
 )
 from ..validation import (
     ArtifactPolicyError,
-    assemble_cmake_build_request,
-    assemble_cmake_configure_request,
     assemble_compile_request,
     assemble_fuzz_request,
     decide_generation,
+    find_build_output_binary,
     make_execution_result,
     parse_libfuzzer_metrics,
     validate_generated_artifacts,
@@ -89,7 +90,11 @@ class GenerationMixin:
         self._event("generation:model_completed", {"loop": loop, "files": len(artifacts.files)})
         self._event("generation:validation_started", {"loop": loop})
         try:
-            validate_generated_artifacts(artifacts, self.profile)
+            validate_generated_artifacts(
+                artifacts,
+                self.profile,
+                build_dir_mode=self.preprocess.build_dir is not None,
+            )
         except ArtifactPolicyError as exc:
             self._record_loop_consumed(loop)
             summary = f"generated artifacts violate controller policy: {exc}"
@@ -173,38 +178,38 @@ class GenerationMixin:
             run_dir=self.store.run_dir,
             source_root=self.preprocess.source_root,
             candidate_dir=candidate_dir,
+            build_dir=self.preprocess.build_dir,
             binary_name=binary_name,
         )
         self.backend.prepare(context)
 
-        build_library, build_include_dirs = self._cmake_build_if_requested(loop)
-        if build_library is None and self.request.build_dir is not None:
-            # cmake configure/build failed; terminal decided by the event above.
-            return
-
-        compile_request = assemble_compile_request(
-            artifacts,
-            self.profile,
-            self.preprocess.source_root,
-            candidate_dir,
-            build_library=build_library,
-            build_include_dirs=build_include_dirs,
-        )
-        self._event("execution:compile_started", {"loop": loop}, phase=Phase.HARNESS_EXECUTION)
-        compile_result = self.backend.execute(compile_request)
-        self._event(
-            "execution:compile",
-            {"loop": loop, "exit_code": compile_result.exit_code, "timed_out": compile_result.timed_out},
-            phase=Phase.HARNESS_EXECUTION,
-        )
+        if self.preprocess.build_dir is not None:
+            compile_result, binary = self._run_build_dir_script(loop, candidate_dir)
+            if binary is not None:
+                self.backend.prepare(context.model_copy(update={"executable_dir": binary.parent}))
+        else:
+            compile_request = assemble_compile_request(
+                artifacts,
+                self.profile,
+                self.preprocess.source_root,
+                candidate_dir,
+            )
+            self._event("execution:compile_started", {"loop": loop}, phase=Phase.HARNESS_EXECUTION)
+            compile_result = self.backend.execute(compile_request)
+            binary = candidate_dir / binary_name if compile_result.exit_code == 0 else None
+            self._event(
+                "execution:compile",
+                {"loop": loop, "exit_code": compile_result.exit_code, "timed_out": compile_result.timed_out},
+                phase=Phase.HARNESS_EXECUTION,
+            )
         if loop == 1:
-            self._first_compile_success = compile_result.exit_code == 0
+            self._first_compile_success = compile_result.exit_code == 0 and binary is not None
 
         fuzz_result: ProcessResult | None = None
         coverage: CoverageMetrics | None = None
         coverage_valid = True
-        if compile_result.exit_code == 0:
-            fuzz_result, coverage, coverage_valid = self._run_fuzz_and_coverage(loop, candidate_dir, binary_name)
+        if compile_result.exit_code == 0 and binary is not None:
+            fuzz_result, coverage, coverage_valid = self._run_fuzz_and_coverage(loop, binary)
 
         execution = make_execution_result(
             run_id=self.state.run_id,
@@ -214,6 +219,7 @@ class GenerationMixin:
             coverage=coverage,
             coverage_valid=coverage_valid,
             crash_artifact=self._first_crash_artifact(loop),
+            fuzzer_binary=binary,
         )
         self.last_execution = execution
         self._persist_execution(execution)
@@ -314,107 +320,98 @@ class GenerationMixin:
         self.state.active_loop = None
         self.state.loop_stage = None
 
-    def _cmake_build_if_requested(
+    def _run_build_dir_script(
         self: ControllerState,
         loop: int,
-    ) -> tuple[Path | None, list[Path] | None]:
-        """Configure and build the user CMake project, returning the library.
-
-        Returns ``(None, None)`` when build-dir mode is not in use; on failure
-        it records a blocked/regeneration event and returns ``(None, None)``
-        while leaving the terminal decision to the caller.
-        """
-        build_dir = self.request.build_dir
-        if build_dir is None or self.store is None:
-            return None, None
-        assert self.preprocess is not None
-        build_dir = build_dir.resolve()
-        build_root = build_dir / "goaloop-build"
-        cmake = self.profile.tools.cmake
-        timeout = self.profile.resources.timeout_seconds
-
-        configure = assemble_cmake_configure_request(
-            cmake=cmake,
-            clang=self.profile.tools.clang,
-            clangxx=self.profile.tools.clangxx,
-            build_dir=build_dir,
-            build_root=build_root,
-            flags=self.profile.build.flags,
-            timeout_seconds=timeout,
-        )
+        candidate_dir: Path,
+    ) -> tuple[ProcessResult, Path | None]:
+        assert self.store is not None and self.preprocess is not None
+        build_dir = self.preprocess.build_dir
+        assert build_dir is not None
+        harness_source = candidate_dir / "harness.c"
+        harness_destination = build_dir / "src" / "harness.c"
+        shutil.copy2(harness_source, harness_destination)
         self._event(
-            "execution:cmake_configure_started",
-            {"loop": loop, "build_dir": str(build_dir)},
+            "execution:build_harness_copied",
+            {"loop": loop, "source": str(harness_source), "destination": str(harness_destination)},
             phase=Phase.HARNESS_EXECUTION,
         )
-        configure_result = self.backend.execute(configure)
+
+        stdout_path = self.store.logs_dir / f"build-loop-{loop:02d}.stdout.log"
+        request = ProcessRequest(
+            argv=[self.profile.tools.shell, str(build_dir / "build.sh")],
+            cwd=build_dir,
+            timeout_seconds=self.profile.resources.timeout_seconds,
+            env={
+                "GOALOOP_HARNESS": str(harness_destination),
+                "GOALOOP_RUN_DIR": str(self.store.run_dir),
+                "GOALOOP_LOOP": str(loop),
+            },
+            stdout_path=stdout_path,
+        )
         self._event(
-            "execution:cmake_configure",
-            {"loop": loop, "exit_code": configure_result.exit_code, "build_dir": str(build_dir)},
+            "execution:build_script_started",
+            {"loop": loop, "argv": request.argv, "cwd": str(build_dir)},
             phase=Phase.HARNESS_EXECUTION,
         )
-        if configure_result.exit_code != 0:
-            self._terminate(TerminalStatus.BLOCKED, f"cmake configure failed: {configure_result.stderr[-2000:]}")
-            return None, None
-
-        build_request = assemble_cmake_build_request(
-            cmake=cmake,
-            build_root=build_root,
-            target=self.profile.build.target,
-            timeout_seconds=timeout,
+        result = self.backend.execute(request)
+        stdout, stdout_truncated = _read_output_tail(
+            stdout_path,
+            self.profile.resources.max_output_bytes,
         )
-        self._event("execution:cmake_build_started", {"loop": loop}, phase=Phase.HARNESS_EXECUTION)
-        build_result = self.backend.execute(build_request)
+        result = result.model_copy(
+            update={
+                "stdout": stdout,
+                "output_truncated": result.output_truncated or stdout_truncated,
+            }
+        )
         self._event(
-            "execution:cmake_build",
-            {"loop": loop, "exit_code": build_result.exit_code},
+            "execution:build_script",
+            {
+                "loop": loop,
+                "exit_code": result.exit_code,
+                "timed_out": result.timed_out,
+                "stdout_log": str(stdout_path),
+            },
             phase=Phase.HARNESS_EXECUTION,
         )
-        if build_result.exit_code != 0:
-            self._terminate(TerminalStatus.BLOCKED, f"cmake build failed: {build_result.stderr[-2000:]}")
-            return None, None
+        if result.exit_code != 0:
+            return result, None
 
-        library = self._find_build_library(build_root)
-        if library is None:
-            self._terminate(
-                TerminalStatus.BLOCKED,
-                "cmake build produced no static library; declare build.library in the profile",
+        binary = find_build_output_binary(f"{result.stdout}\n{result.stderr}", build_dir)
+        if binary is None:
+            detail = (
+                "build.sh exited successfully but did not identify an executable in its output; "
+                "print GOALOOP_FUZZER=<path> from build.sh"
             )
-            return None, None
-        include_dirs = [build_dir / item for item in self.profile.build.include_dirs]
+            return result.model_copy(update={"exit_code": None, "stderr": f"{result.stderr}\n{detail}"}), None
         self._event(
-            "execution:cmake_library",
-            {"loop": loop, "library": str(library)},
+            "execution:build_binary",
+            {"loop": loop, "binary": str(binary)},
             phase=Phase.HARNESS_EXECUTION,
         )
-        return library, include_dirs
-
-    def _find_build_library(self: ControllerState, build_root: Path) -> Path | None:
-        declared = self.profile.build.library
-        if declared:
-            candidate = build_root / declared
-            return candidate if candidate.is_file() else None
-        archives = sorted(item for item in build_root.rglob("*.a") if item.is_file())
-        return archives[0] if archives else None
+        return result, binary
 
     def _run_fuzz_and_coverage(
         self: ControllerState,
         loop: int,
-        candidate_dir: Path,
-        binary_name: str,
+        binary: Path,
     ) -> tuple[ProcessResult, CoverageMetrics, bool]:
         assert self.store is not None and self.preprocess is not None
         loop_crashes = self.store.crashes_dir / f"loop-{loop:02d}"
         loop_crashes.mkdir(parents=True, exist_ok=True)
         fuzz_request = assemble_fuzz_request(
-            binary=candidate_dir / binary_name,
+            binary=binary,
             corpus_dir=self.store.corpus_dir,
             crashes_dir=loop_crashes,
             fuzz_seconds=self.request.fuzz_seconds,
             timeout_seconds=self.profile.resources.timeout_seconds,
         )
         profraw = self.store.coverage_dir / f"loop-{loop:02d}.profraw"
-        fuzz_env = {"LLVM_PROFILE_FILE": str(profraw)}
+        fuzz_env = {
+            "LLVM_PROFILE_FILE": str(profraw),
+            "ASAN_OPTIONS": "detect_leaks=0",
+        }
         fuzz_request = fuzz_request.model_copy(update={"env": fuzz_env})
         self._event(
             "execution:fuzz_started",
@@ -436,7 +433,6 @@ class GenerationMixin:
             self._time_to_bug = fuzz_result.duration_seconds
 
         metrics = parse_libfuzzer_metrics(f"{fuzz_result.stdout}\n{fuzz_result.stderr}")
-        binary = candidate_dir / binary_name
         target_metrics = None
         self._event("execution:coverage_started", {"loop": loop}, phase=Phase.HARNESS_EXECUTION)
         try:
@@ -514,8 +510,21 @@ class GenerationMixin:
     def _compiled_binary(self: ControllerState, execution: HarnessExecutionResult | None) -> Path | None:
         if execution is None:
             return None
+        if execution.fuzzer_binary is not None:
+            return execution.fuzzer_binary
         argv = execution.compile_result.argv
         for index, item in enumerate(argv):
             if item == "-o" and index + 1 < len(argv):
                 return Path(argv[index + 1])
         return None
+
+
+def _read_output_tail(path: Path, max_bytes: int) -> tuple[str, bool]:
+    if not path.is_file():
+        return "", False
+    size = path.stat().st_size
+    with path.open("rb") as handle:
+        if size > max_bytes:
+            handle.seek(-max_bytes, 2)
+        data = handle.read()
+    return data.decode("utf-8", errors="replace"), size > max_bytes

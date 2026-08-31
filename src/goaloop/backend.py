@@ -52,10 +52,10 @@ def toolchain_capabilities(profile: ValidationProfile) -> list[Capability]:
         "clangxx": profile.tools.clangxx,
         "llvm_profdata": profile.tools.llvm_profdata,
         "llvm_cov": profile.tools.llvm_cov,
+        "shell": profile.tools.shell,
     }
     if profile.sandbox.required:
         tool_names["bubblewrap"] = profile.tools.bubblewrap
-    tool_names["cmake"] = profile.tools.cmake
     for name, executable in tool_names.items():
         found = shutil.which(executable)
         capabilities.append(
@@ -87,15 +87,20 @@ class LocalLinuxBackend:
             self.profile.tools.clangxx,
             self.profile.tools.llvm_profdata,
             self.profile.tools.llvm_cov,
-            self.profile.tools.cmake,
+            self.profile.tools.shell,
         ]
         if self.profile.sandbox.required:
             allowed.append(self.profile.tools.bubblewrap)
+        allowed_dirs = [str(context.run_dir.resolve())]
+        if context.candidate_dir is not None:
+            allowed_dirs.append(str(context.candidate_dir.resolve()))
+        if context.build_dir is not None:
+            allowed_dirs.append(str(context.build_dir.resolve()))
+        if context.executable_dir is not None:
+            allowed_dirs.append(str(context.executable_dir.resolve()))
         lease = ExecutionLease(
             allowed_executables=[_resolve_tool(item) for item in allowed],
-            allowed_dirs=[str(context.run_dir.resolve()), str(context.candidate_dir.resolve())]
-            if context.candidate_dir is not None
-            else [str(context.run_dir.resolve())],
+            allowed_dirs=allowed_dirs,
             timeout_seconds=self.profile.resources.timeout_seconds,
             max_commands=self.profile.resources.max_commands,
         )

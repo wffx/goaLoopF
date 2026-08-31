@@ -59,11 +59,11 @@ ARTIFACT_SCHEMA_HINT = """The GeneratedArtifactSet object has exactly these fiel
 - build (inside endpoint_plan) has: compiler ("clang"|"clang++"), harness_file,
   target_sources (array), include_dirs (array), defines (array), cflags (array),
   ldflags (array), libraries (array), binary_name (string)
-- files: array of { path, content, purpose }, at least 4 and at most 64 entries,
+- files: array of { path, content, purpose }, at least 1 and at most 64 entries,
   with unique paths.
 
 Every path must be relative, use forward slashes, and contain no "..".
-Required files: the harness C/C++ source, Makefile, build.sh, endpoint.json, README.fuzz.md.
+Mode-specific required files are listed in the Build contract below.
 Example shape:
 {
   "summary": "candidate harness",
@@ -97,6 +97,21 @@ Example shape:
     {"path": "README.fuzz.md", "content": "# fuzz", "purpose": "review only"}
   ]
 }"""
+
+BUILD_DIR_CONTRACT = """Build-directory mode is active. Apply these additional rules:
+- files must contain exactly one entry whose path is harness.c.
+- Do not generate Makefile, build.sh, endpoint.json, README, stub sources, or any other file.
+- endpoint_plan.build.harness_file must be harness.c.
+- target_sources, include_dirs, defines, cflags, ldflags, and libraries must all be empty arrays.
+- binary_name is only a schema placeholder; the controller discovers the real executable from
+  the trusted build.sh output.
+- The controller copies harness.c to <build-dir>/src/harness.c and directly runs
+  <build-dir>/build.sh. Never invent build commands or bypass product compile/link failures."""
+
+STANDARD_BUILD_CONTRACT = """Standard mode rules:
+- files must include the harness source, Makefile, build.sh, endpoint.json and README.fuzz.md.
+- build.sh and Makefile are for review only; the controller builds from endpoint_plan.build.
+- Use target_sources for the real product sources that implement the target function."""
 
 
 class GenerationFailure(RuntimeError):
@@ -697,6 +712,7 @@ def build_generation_prompt(
     feedback_json = (
         json.dumps(feedback.model_dump(mode="json"), ensure_ascii=False) if feedback is not None else "(none)"
     )
+    build_contract = BUILD_DIR_CONTRACT if preprocess.build_dir is not None else STANDARD_BUILD_CONTRACT
     return f"""You generate auditable libFuzzer harness artifacts as strict JSON for an authorized C/C++ target.
 
 Respond with EXACTLY ONE JSON object and no prose outside it. The object must match the
@@ -722,6 +738,9 @@ This is generation loop {expected_loop}.
 ## GeneratedArtifactSet contract
 {ARTIFACT_SCHEMA_HINT}
 
+## Build contract
+{build_contract}
+
 ## Run context
 - run_id: {goal.run_id}
 - phase: harness_generation
@@ -742,10 +761,7 @@ Constraints:
 - The TOP-LEVEL object must include schema_version ("1.0"), run_id, phase and
   generation_loop exactly as given in the Run context above; a missing or
   different value is rejected. Do not copy the example shape verbatim.
-- files must include the harness source, Makefile, build.sh, endpoint.json and README.fuzz.md,
-  and every path must be relative, using forward slashes, without "..".
-- build.sh and Makefile are for review only; the controller builds from endpoint_plan.build.
-- Use target_sources for the real product sources that implement the target function.
+- every path must be relative, use forward slashes, and contain no "..".
 - candidate_ready must be true and generation_loop must equal {expected_loop}."""
 
 

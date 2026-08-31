@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import os
 import re
+import shlex
 from pathlib import Path
 
 from .models import (
@@ -35,10 +37,35 @@ class ArtifactPolicyError(ValueError):
 def validate_generated_artifacts(
     artifacts: GeneratedArtifactSet,
     profile: ValidationProfile,
+    *,
+    build_dir_mode: bool = False,
 ) -> None:
     """Reject incomplete or over-privileged model output before materialization."""
 
     paths = {item.path for item in artifacts.files}
+    if build_dir_mode:
+        if paths != {"harness.c"}:
+            raise ArtifactPolicyError(
+                "build-directory mode must generate exactly one file named harness.c"
+            )
+        build = artifacts.endpoint_plan.build
+        if build.harness_file != "harness.c":
+            raise ArtifactPolicyError("build-directory mode harness_file must be harness.c")
+        if any(
+            (
+                build.target_sources,
+                build.include_dirs,
+                build.defines,
+                build.cflags,
+                build.ldflags,
+                build.libraries,
+            )
+        ):
+            raise ArtifactPolicyError(
+                "build-directory mode BuildPlan arrays must be empty; build.sh owns the build"
+            )
+        return
+
     missing = sorted(REQUIRED_EXACT_FILES - paths)
     if missing:
         raise ArtifactPolicyError(f"required generated files are missing: {', '.join(missing)}")
@@ -61,17 +88,8 @@ def assemble_compile_request(
     profile: ValidationProfile,
     source_root: Path,
     candidate_dir: Path,
-    *,
-    build_library: Path | None = None,
-    build_include_dirs: list[Path] | None = None,
 ) -> ProcessRequest:
-    """Build a compiler argv from structured data; generated scripts are never executed.
-
-    In build-directory mode (``build_library`` set) the product sources come
-    from a prebuilt static library instead of model-declared target_sources:
-    the harness is compiled against the library's include dirs and linked with
-    the library, so the model does not need to guess build parameters.
-    """
+    """Build a compiler argv from structured data outside build-directory mode."""
 
     validate_generated_artifacts(artifacts, profile)
     source_root = source_root.resolve()
@@ -81,14 +99,8 @@ def assemble_compile_request(
 
     harness = _contained(candidate_dir, build.harness_file, "harness file")
     binary = _contained(candidate_dir, build.binary_name, "fuzzer binary")
-    target_sources = (
-        []
-        if build_library is not None
-        else [_contained(source_root, item, "target source") for item in build.target_sources]
-    )
+    target_sources = [_contained(source_root, item, "target source") for item in build.target_sources]
     include_dirs = [_contained(source_root, item, "include directory") for item in build.include_dirs]
-    if build_include_dirs is not None:
-        include_dirs = [*build_include_dirs, *include_dirs]
 
     argv = [
         compiler,
@@ -102,7 +114,6 @@ def assemble_compile_request(
         *build.cflags,
         *build.ldflags,
         *(_library_argument(item) for item in build.libraries),
-        *([str(build_library)] if build_library is not None else []),
         "-o",
         str(binary),
     ]
@@ -113,52 +124,61 @@ def assemble_compile_request(
     )
 
 
-INSTRUMENT_FLAGS = "-fsanitize=address,undefined -fprofile-instr-generate -fcoverage-mapping"
+_OUTPUT_LABEL_RE = re.compile(
+    r"(?:^|\s)(?:GOALOOP_FUZZER|fuzzer|executable|binary|output)\s*[:=]\s*(?P<path>\"[^\"]+\"|'[^']+'|\S+)",
+    re.IGNORECASE,
+)
 
 
-def assemble_cmake_configure_request(
-    *,
-    cmake: str,
-    clang: str,
-    clangxx: str,
-    build_dir: Path,
-    build_root: Path,
-    flags: list[str] | None = None,
-    timeout_seconds: int,
-) -> ProcessRequest:
-    """Configure the user CMake project with sanitizer/coverage instrumentation.
+def find_build_output_binary(output: str, build_dir: Path) -> Path | None:
+    """Resolve an executable announced by build.sh output."""
 
-    Out-of-source build under ``<build_dir>/goaloop-build`` so the user's
-    directory keeps its original layout; CMakeLists.txt is never modified.
-    The compiler is pinned to clang/clang++ because the instrumentation flags
-    (e.g. -fprofile-instr-generate) are clang-specific.
-    """
-    argv = [
-        cmake,
-        "-S",
-        str(build_dir),
-        "-B",
-        str(build_root),
-        f"-DCMAKE_C_COMPILER={clang}",
-        f"-DCMAKE_CXX_COMPILER={clangxx}",
-        "-DCMAKE_C_FLAGS=" + INSTRUMENT_FLAGS,
-        "-DCMAKE_CXX_FLAGS=" + INSTRUMENT_FLAGS,
-        *(flags or []),
-    ]
-    return ProcessRequest(argv=argv, cwd=build_dir, timeout_seconds=timeout_seconds)
+    build_root = build_dir.resolve()
+    explicit: list[str] = []
+    compiler_outputs: list[str] = []
+    generic_paths: list[str] = []
+    for line in output.splitlines():
+        explicit.extend(match.group("path") for match in _OUTPUT_LABEL_RE.finditer(line))
+        try:
+            tokens = shlex.split(line)
+        except ValueError:
+            continue
+        for index, token in enumerate(tokens[:-1]):
+            if token == "-o":
+                compiler_outputs.append(tokens[index + 1])
+        generic_paths.extend(tokens)
+
+    for raw_path in reversed(explicit):
+        candidate = _build_output_candidate(raw_path, build_root, allow_outside=True)
+        if candidate is not None:
+            return candidate
+    for raw_path in reversed(compiler_outputs):
+        candidate = _build_output_candidate(raw_path, build_root, allow_outside=True)
+        if candidate is not None:
+            return candidate
+    for raw_path in reversed(generic_paths):
+        candidate = _build_output_candidate(raw_path, build_root, allow_outside=False)
+        if candidate is not None:
+            return candidate
+    return None
 
 
-def assemble_cmake_build_request(
-    *,
-    cmake: str,
-    build_root: Path,
-    target: str | None,
-    timeout_seconds: int,
-) -> ProcessRequest:
-    argv = [cmake, "--build", str(build_root)]
-    if target is not None:
-        argv += ["--target", target]
-    return ProcessRequest(argv=argv, cwd=build_root, timeout_seconds=timeout_seconds)
+def _build_output_candidate(raw_path: str, build_root: Path, *, allow_outside: bool) -> Path | None:
+    cleaned = raw_path.strip().strip("\"'").rstrip(",;:)")
+    if not cleaned:
+        return None
+    candidate = Path(cleaned)
+    if not candidate.is_absolute():
+        candidate = build_root / candidate
+    try:
+        resolved = candidate.resolve()
+    except OSError:
+        return None
+    if not allow_outside and not resolved.is_relative_to(build_root):
+        return None
+    if not resolved.is_file() or not os.access(resolved, os.X_OK):
+        return None
+    return resolved
 
 
 def assemble_fuzz_request(
@@ -306,6 +326,7 @@ def make_execution_result(
     coverage: CoverageMetrics | None = None,
     coverage_valid: bool = True,
     crash_artifact: str | None = None,
+    fuzzer_binary: Path | None = None,
 ) -> HarnessExecutionResult:
     """Classify raw process evidence into exactly one workflow disposition."""
 
@@ -344,6 +365,7 @@ def make_execution_result(
             generation_loop=generation_loop,
             disposition=disposition,
             compile_result=compile_result,
+            fuzzer_binary=fuzzer_binary,
             fuzz_result=fuzz_result,
             coverage=metrics,
             sanitizer_kind=sanitizer,
@@ -355,6 +377,7 @@ def make_execution_result(
         generation_loop=generation_loop,
         disposition=disposition,
         compile_result=compile_result,
+        fuzzer_binary=fuzzer_binary,
         fuzz_result=fuzz_result,
         coverage=metrics,
         crash_artifact=crash_artifact,

@@ -27,7 +27,7 @@ from .models import (
 )
 
 SOURCE_SUFFIXES = {".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx"}
-BUILD_NAMES = {"CMakeLists.txt", "Makefile", "meson.build", "BUILD", "BUILD.bazel"}
+BUILD_NAMES = {"CMakeLists.txt", "Makefile", "build.sh", "meson.build", "BUILD", "BUILD.bazel"}
 # Per-tier caps for the minimal source context embedded in generation prompts.
 MAX_TARGET_FILE_BYTES = 64 * 1024
 MAX_CALL_TREE_BYTES = 16 * 1024
@@ -57,7 +57,7 @@ def preprocess_request(
     project_name = repo_root.name if repo_root.name else "unknown"
     repos_root = (workspace_root / "repos").resolve()
     inside_repos = repo_root.is_relative_to(repos_root)
-    # Resolve the CMake build directory up front (does not require it to
+    # Resolve the trusted build directory up front (does not require it to
     # exist yet; existence is checked below for the ready path).
     resolved_build_dir: Path | None = None
     if request.build_dir is not None:
@@ -123,8 +123,8 @@ def preprocess_request(
                 f"build directory does not exist: {build_dir}",
                 source_scope=source_scope,
             )
-        if not (build_dir / "CMakeLists.txt").is_file():
-            basic_caps.append(Capability(name="build_dir", available=False, detail="CMakeLists.txt missing"))
+        if not (build_dir / "build.sh").is_file():
+            basic_caps.append(Capability(name="build_dir", available=False, detail="build.sh missing"))
             return _not_ready(
                 run_id,
                 project_name,
@@ -132,11 +132,23 @@ def preprocess_request(
                 request,
                 basic_caps,
                 TerminalStatus.NEEDS_INPUT,
-                f"build directory has no CMakeLists.txt: {build_dir}",
+                f"build directory has no build.sh: {build_dir}",
+                source_scope=source_scope,
+            )
+        if not (build_dir / "src").is_dir():
+            basic_caps.append(Capability(name="build_dir", available=False, detail="src directory missing"))
+            return _not_ready(
+                run_id,
+                project_name,
+                repo_root,
+                request,
+                basic_caps,
+                TerminalStatus.NEEDS_INPUT,
+                f"build directory has no src directory: {build_dir}",
                 source_scope=source_scope,
             )
         if profile.sandbox.required:
-            basic_caps.append(Capability(name="build_dir", available=False, detail="cmake build requires no sandbox"))
+            basic_caps.append(Capability(name="build_dir", available=False, detail="build.sh requires no sandbox"))
             return _not_ready(
                 run_id,
                 project_name,
