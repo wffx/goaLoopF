@@ -16,8 +16,16 @@ from ..models import (
     GenerationFeedback,
     Phase,
     PreprocessResult,
+    ResearchMetrics,
     RunContext,
     TerminalStatus,
+)
+from ..optimization import (
+    OPTIMIZATION_ANALYSIS_FILENAME,
+    OPTIMIZATION_REPORT_FILENAME,
+    analyze_run_optimization,
+    render_optimization_markdown,
+    render_report_section,
 )
 from ..report import (
     build_research_metrics,
@@ -153,7 +161,34 @@ class ReportMixin:
         )
         self.store.write_json(self.store.run_dir / "validation.json", validation)
         self.state.validation_result_path = "validation.json"
-        self._write_metrics(report_path)
+        metrics = self._write_metrics(report_path)
+        trace_summary = self.driver.trace_summary()
+        optimization = analyze_run_optimization(
+            state=self.state,
+            metrics=metrics,
+            reason=reason,
+            execution=self.last_execution,
+            trace_summary=trace_summary,
+        )
+        self.store.write_json(self.store.run_dir / OPTIMIZATION_ANALYSIS_FILENAME, optimization)
+        self.store.write_text(
+            self.store.run_dir / OPTIMIZATION_REPORT_FILENAME,
+            render_optimization_markdown(optimization),
+        )
+        report_content = report_path.read_text(encoding="utf-8").rstrip() + "\n\n" + render_report_section(optimization)
+        self.store.write_text(report_path, report_content)
+        self.state.optimization_analysis_path = OPTIMIZATION_ANALYSIS_FILENAME
+        top = optimization.suggestions[0] if optimization.suggestions else None
+        self._event(
+            "optimization:completed",
+            {
+                "suggestions": len(optimization.suggestions),
+                "highest_priority": top.priority.value if top is not None else None,
+                "top_suggestion": top.title if top is not None else None,
+                "analysis": OPTIMIZATION_ANALYSIS_FILENAME,
+                "report": OPTIMIZATION_REPORT_FILENAME,
+            },
+        )
         self._event(
             "report:written",
             {
@@ -182,11 +217,11 @@ class ReportMixin:
                 return str(reason) if reason else None
         return None
 
-    def _write_metrics(self: ControllerState, report_path: Path) -> None:
+    def _write_metrics(self: ControllerState, report_path: Path) -> ResearchMetrics:
         assert self.state is not None and self.store is not None
         elapsed = time.monotonic() - self._phase_started
         durations = dict(self._phase_durations)
-        durations["crash_analysis_report"] = round(elapsed, 3)
+        durations["crash_analysis_report"] = round(durations.get("crash_analysis_report", 0.0) + elapsed, 3)
         provider = self.model_profile.provider if self.model_profile is not None else "deepseek-official"
         model = self.model_profile.model if self.model_profile is not None else "deepseek-v4-pro"
         metrics = build_research_metrics(
@@ -219,6 +254,7 @@ class ReportMixin:
             }
         )
         self.store.write_json(self.store.run_dir / "research-metrics.json", metrics)
+        return metrics
 
     def _last_candidate_dir(self: ControllerState) -> Path | None:
         if self.store is None or self.state is None:

@@ -42,7 +42,8 @@ goaloop run --repo repos/cJSON-1.7.17 --source . --function cJSON_Parse --profil
 - 代码仓放在 `repos/<project>/`（或任意自定义目录，见下）；`--source` 指定仓内
   被测函数所在目录或文件
 - 所有输出写入 `work/<project>/runs/<run-id>/`（可用 `--output <dir>` 指定
-  产物根目录），报告为 `report.md`；原始 DSH trace 和摘要位于 `logs/`
+  产物根目录），报告为 `report.md`；原始 DSH trace 和摘要位于 `logs/`；任务结束后
+  默认生成并在 Terminal 输出 `optimization-suggestions.json/.md` 中的优化建议
 - 支持 `resume` / `status` / `report` / `evaluate`，详见 [doc/cli.md](doc/cli.md)
 - 默认使用 DeepSeek 模型；也支持 OpenAI/Anthropic 等任意模型或 OpenAI 兼容
   网关（通过 pi-ai 适配器，`--model-profile` 选择，见
@@ -86,6 +87,7 @@ src/goaloop/
 ├── coverage.py        # profraw 合并、llvm-cov 导出、覆盖归因
 ├── driver.py          # DeepSeek Harness SDK 适配器 + 测试驱动
 ├── crash.py           # 栈归属、输入最小化、独立复现
+├── optimization.py    # 终态指标/trace 的确定性分析与优化建议
 ├── report.py / redaction.py  # 报告、研究指标、日志脱敏
 ├── workflow/          # 四阶段状态机（controller/generation/report）
 └── cli.py             # run/resume/status/report/evaluate/doctor

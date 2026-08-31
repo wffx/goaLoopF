@@ -40,9 +40,24 @@ request header/context、完整 prompt 等噪声；reasoning/text 流式 chunk �
 `resume` 时 recorder 从现有 JSONL 重新计算摘要，再继续递增 sequence，避免仅依赖可能
 中断写入的摘要文件。
 
+## 自动优化分析
+
+每个任务进入终态后，goaloop 默认将 `research-metrics.json`、终态原因、最后一次执行
+证据和 `dsh-trace-summary.json` 交给确定性规则分析器，生成：
+
+- `optimization-suggestions.json`：结构化信号和最多 6 条有序建议；
+- `optimization-suggestions.md`：包含证据、建议和预期收益的完整报告；
+- `report.md` 中的精简建议章节。
+
+分析器不调用大模型，不增加 token 消耗。规则会识别输入/环境阻断、格式重试、首轮编译
+失败、多轮返工、模型调用失败、高延迟、高输入 token 和工具调用生命周期不完整等信号。
+Terminal 默认显示建议摘要，`goaloop status` 可再次查看建议；`evaluate-results.json`
+同时保存每个 run 的建议并按目标函数汇总高频项。
+
 ## 优化使用方式
 
-建议以 run/evaluate 为单位离线分析，不让 generation Agent 修改工程：
+自动建议用于快速定位，仍建议以 run/evaluate 为单位做离线验证，不让 generation Agent
+直接修改工程：
 
 1. 按模型、prompt version、目标函数和终态分组；
 2. 对比模型耗时、估算输入规模、格式重试、工具调用和 generation loop 数；

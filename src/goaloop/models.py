@@ -47,6 +47,25 @@ class TerminalStatus(StrEnum):
     FAILED = "failed"
 
 
+class OptimizationPriority(StrEnum):
+    HIGH = "high"
+    MEDIUM = "medium"
+    LOW = "low"
+
+
+class OptimizationCategory(StrEnum):
+    INPUT = "input"
+    ENVIRONMENT = "environment"
+    MODEL_OUTPUT = "model_output"
+    GENERATION = "generation"
+    BUILD = "build"
+    CONTEXT = "context"
+    PERFORMANCE = "performance"
+    TOOLING = "tooling"
+    TRIAGE = "triage"
+    VALIDATION = "validation"
+
+
 class ExecutionDisposition(StrEnum):
     ACCEPTED = "accepted"
     NEEDS_REGENERATION = "needs_regeneration"
@@ -570,6 +589,28 @@ class ResearchMetrics(Contract):
     loop_hashes: dict[str, dict[str, str]] = Field(default_factory=dict)
 
 
+class OptimizationSuggestion(Contract):
+    id: Annotated[str, Field(min_length=1, max_length=80, pattern=r"^[a-z0-9-]+$")]
+    priority: OptimizationPriority
+    category: OptimizationCategory
+    title: Annotated[str, Field(min_length=1, max_length=160)]
+    evidence: list[Annotated[str, Field(min_length=1, max_length=1000)]] = Field(default_factory=list)
+    recommendation: Annotated[str, Field(min_length=1, max_length=2000)]
+    expected_impact: Annotated[str, Field(min_length=1, max_length=1000)]
+
+
+class OptimizationAnalysis(Contract):
+    schema_version: Literal["1.0"] = SCHEMA_VERSION
+    run_id: str
+    generated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    final_status: TerminalStatus
+    source_metrics_path: str = "research-metrics.json"
+    trace_summary_path: str | None = None
+    summary: Annotated[str, Field(min_length=1, max_length=1000)]
+    signals: dict[str, int | float | str | bool | None] = Field(default_factory=dict)
+    suggestions: list[OptimizationSuggestion] = Field(default_factory=list)
+
+
 class RunState(Contract):
     schema_version: Literal["1.0"] = SCHEMA_VERSION
     run_id: str
@@ -585,6 +626,7 @@ class RunState(Contract):
     last_execution_path: str | None = None
     validation_result_path: str | None = None
     preprocess_result_path: str | None = None
+    optimization_analysis_path: str | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     # Output root holding this run's artifacts (resolved absolute path).

@@ -23,6 +23,7 @@ tests/
 ├── test_config.py           # Profile 加载（TOML 解析、路径遍历防护、缺失报错）
 ├── test_preprocess.py       # 预处理（源码范围、符号查找、symlink 逃逸、语言检测、上下文截断）
 ├── test_trace.py            # 原始 DSH trace、摘要聚合、Terminal formatter、resume 序列恢复
+├── test_optimization.py     # 自动分析规则、优先级、Markdown/report 渲染
 ├── test_storage.py          # 持久化（run 目录、原子写入、append-only 事件、物化、路径逃逸）
 ├── test_validation.py       # 策略/解析（ArtifactPolicy、compile/fuzz argv 组装、libFuzzer 指标解析、sanitizer 检测、决策策略、分流）
 ├── test_backend.py          # 后端执行（echo、timeout、白名单、输出截断、stdout_path 直写、bwrap argv 构造）

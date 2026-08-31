@@ -105,7 +105,25 @@ suite.json 格式：
 
 对每个 entry 重复 `repetitions` 次，汇总终态分布以及 DSH trace 事件、模型调用耗时、
 估算输入 token、响应规模、工具调用和格式重试，写入 `evaluate-results.json`。
+每个 run 的自动优化建议会写入 `results[].optimization_suggestions`，并在顶层
+`optimization` 按目标函数和建议 ID 汇总出现次数。
 启用 `--debug` 时，每个运行同样实时输出 DSH/model trace。
+
+### 自动优化建议
+
+`run`、`resume` 和 `evaluate` 在任务进入终态并写完研究指标后，默认执行确定性分析，
+无需额外开关，也不会再次调用大模型。Terminal 会输出建议数量、最高优先级和建议内容；
+run 目录同时生成：
+
+- `optimization-suggestions.json`：机器可读的信号、证据、优先级、建议与预期收益；
+- `optimization-suggestions.md`：完整的人类可读分析；
+- `report.md`：追加精简的 `Optimization Suggestions` 章节。
+
+当前规则关注输入范围、环境阻断、模型格式失败、首轮编译、重生成轮次、模型调用失败、
+平均调用超过 60 秒、累计估算输入超过 100K token/单次超过 50K token，以及未闭合的
+`tool/call`/`tool/result`；某阶段耗时至少 30 秒且占比达到 70% 时，也会指出主导阶段。
+即使任务一次成功且没有异常信号，也会输出低优先级的重复运行与 A/B 基线建议。
+`resume` 旧终态 run 时，如果缺少该产物，会自动补生成。
 
 ### 实时 DSH/model trace
 

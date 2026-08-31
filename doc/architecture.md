@@ -46,13 +46,19 @@
     │  phase = CRASH_ANALYSIS_REPORT                                            │
     │  ┌─ crash analysis (if crash_candidate):                                 │
     │  │   classify_stack → minimize → reproduce 3× → ownership                │
-    │  └─ write report (report.md + validation.json + research-metrics.json)   │
+    │  └─ write report + metrics + automatic optimization suggestions         │
     └──────────────────────────────────────────────────────────────────────────┘
 ```
 
 进入 generation 后，Driver 始终订阅 DSH notification，将未脱敏原始记录追加到
 `logs/dsh-trace.jsonl`，并同步维护 `logs/dsh-trace-summary.json`。该观察链路不向模型
 新增 Bash、文件、网络或 subagent 权限。
+
+进入终态后，`ReportMixin` 先写入 `research-metrics.json`，再由确定性规则分析器结合
+终态原因、执行结果和 DSH trace 摘要生成 `optimization-suggestions.json` 与
+`optimization-suggestions.md`，同时把简版建议追加到 `report.md`。分析过程不调用模型，
+因此不会增加 token 消耗，也不会因模型不可用阻塞报告阶段。`run`、`resume` 和
+`evaluate` 默认通过 `optimization:completed` 事件输出建议摘要。
 
 ## 一次候选执行（compile → fuzz → coverage → decide）
 
@@ -124,6 +130,9 @@ FuzzRunRequest ──► preprocess ──► kRepo report（只读 BROWSE.VC.DB
                                                           │
                                                           ▼
                                               ValidationResult + report.md
+                                                          │
+                                                          ▼
+                                              ResearchMetrics + OptimizationAnalysis
 ```
 
 ## 模型集成

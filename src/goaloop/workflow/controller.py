@@ -24,6 +24,7 @@ from ..models import (
     TerminalStatus,
     ValidationProfile,
 )
+from ..optimization import OPTIMIZATION_ANALYSIS_FILENAME, OPTIMIZATION_REPORT_FILENAME
 from ..preprocess import preprocess_request
 from ..storage import ArtifactStore, create_run_id
 from .generation import GenerationMixin
@@ -113,7 +114,14 @@ class RunController(GenerationMixin, ReportMixin):
         if self.state is not None and self.state.terminal_status is not None:
             if self.state.phase is not Phase.CRASH_ANALYSIS_REPORT:
                 self._enter_phase(Phase.CRASH_ANALYSIS_REPORT)
-            if self.store is None or not (self.store.run_dir / "validation.json").is_file():
+            if self.store is None or not all(
+                (self.store.run_dir / filename).is_file()
+                for filename in (
+                    "validation.json",
+                    OPTIMIZATION_ANALYSIS_FILENAME,
+                    OPTIMIZATION_REPORT_FILENAME,
+                )
+            ):
                 self._report_step()
         return self.state  # type: ignore[return-value]
 
@@ -255,7 +263,8 @@ class RunController(GenerationMixin, ReportMixin):
     def _enter_phase(self, phase: Phase) -> None:
         assert self.state is not None
         elapsed = time.monotonic() - self._phase_started
-        self._phase_durations[self.state.phase.value] = round(elapsed, 3)
+        current = self._phase_durations.get(self.state.phase.value, 0.0)
+        self._phase_durations[self.state.phase.value] = round(current + elapsed, 3)
         self._phase_started = time.monotonic()
         self.state.phase = phase
         self._event("phase:enter", {"phase": phase.value})
@@ -335,7 +344,6 @@ class RunController(GenerationMixin, ReportMixin):
                 "duration": duration,
             },
         )
-        self._phase_durations["preprocess"] = duration
         self._save_checkpoint()
         if not preprocess.ready:
             status = preprocess.terminal_status or TerminalStatus.FAILED

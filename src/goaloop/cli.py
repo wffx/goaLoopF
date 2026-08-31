@@ -17,6 +17,7 @@ from .config import load_model_profile, load_validation_profile
 from .driver import DeepSeekHarnessDriver
 from .krepo import krepo_cli_path
 from .models import Capability, FuzzRunRequest, Language, ModelProfile, RunEvent, RunState
+from .optimization import OPTIMIZATION_ANALYSIS_FILENAME
 from .redaction import redact
 from .report import REPORT_FILENAME, VALIDATION_FILENAME
 from .storage import ArtifactStore, RunLockedError, create_run_id
@@ -405,11 +406,12 @@ def evaluate(
                 state = controller.run()
             finally:
                 controller.close()
-            metrics_path = (
-                ArtifactStore(ws, state.project_name, run_id, output_root=output).run_dir
-                / "research-metrics.json"
-            )
+            run_dir = ArtifactStore(ws, state.project_name, run_id, output_root=output).run_dir
+            metrics_path = run_dir / "research-metrics.json"
             metrics = json.loads(metrics_path.read_text(encoding="utf-8")) if metrics_path.is_file() else {}
+            optimization = _read_optimization_analysis(run_dir)
+            suggestions = optimization.get("suggestions")
+            suggestion_list = suggestions if isinstance(suggestions, list) else []
             results.append(
                 {
                     "run_id": run_id,
@@ -429,6 +431,8 @@ def evaluate(
                     "estimated_input_tokens": metrics.get("estimated_input_tokens", 0),
                     "model_response_chars": metrics.get("model_response_chars", 0),
                     "tool_calls": metrics.get("tool_calls", 0),
+                    "optimization_suggestion_count": len(suggestion_list),
+                    "optimization_suggestions": suggestion_list,
                 }
             )
 
@@ -444,6 +448,7 @@ def evaluate(
         "results": results,
         "summary": summary,
         "observability": _evaluate_observability(results),
+        "optimization": _evaluate_optimization(results),
     }
     if output is not None:
         out_root = output.resolve()
@@ -497,6 +502,34 @@ def _evaluate_observability(results: list[dict[str, Any]]) -> dict[str, dict[str
     return aggregates
 
 
+def _evaluate_optimization(results: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    aggregates: dict[str, dict[str, dict[str, Any]]] = {}
+    for result in results:
+        function = str(result["function"])
+        function_bucket = aggregates.setdefault(function, {})
+        suggestions = result.get("optimization_suggestions")
+        if not isinstance(suggestions, list):
+            continue
+        for suggestion in suggestions:
+            if not isinstance(suggestion, dict) or not isinstance(suggestion.get("id"), str):
+                continue
+            suggestion_id = suggestion["id"]
+            bucket = function_bucket.setdefault(
+                suggestion_id,
+                {
+                    "id": suggestion_id,
+                    "title": suggestion.get("title"),
+                    "priority": suggestion.get("priority"),
+                    "runs": 0,
+                },
+            )
+            bucket["runs"] = int(bucket["runs"]) + 1
+    return {
+        function: sorted(items.values(), key=lambda item: (-int(item["runs"]), str(item["id"])))
+        for function, items in aggregates.items()
+    }
+
+
 def _echo_state(state: RunState, *, run_dir: Path) -> None:
     typer.echo(f"[goaloop] run {state.run_id}")
     typer.echo(f"[goaloop] project: {state.project_name}")
@@ -513,7 +546,34 @@ def _echo_state(state: RunState, *, run_dir: Path) -> None:
             "原因见上方 reason。常见原因: 预处理失败（源码/目标函数/构建目录/凭据）"
             "或模型调用失败。"
         )
+    _echo_optimization_suggestions(run_dir)
     typer.echo("[goaloop] 定位: goaloop report --run-id <id> 看完整报告; 事件日志: " + str(run_dir / "events.jsonl"))
+
+
+def _echo_optimization_suggestions(run_dir: Path) -> None:
+    analysis = _read_optimization_analysis(run_dir)
+    suggestions = analysis.get("suggestions")
+    if not isinstance(suggestions, list) or not suggestions:
+        return
+    typer.echo(f"[goaloop] optimization suggestions: {run_dir / OPTIMIZATION_ANALYSIS_FILENAME}")
+    for suggestion in suggestions:
+        if not isinstance(suggestion, dict):
+            continue
+        priority = suggestion.get("priority", "unknown")
+        title = suggestion.get("title", "未命名建议")
+        recommendation = suggestion.get("recommendation", "")
+        typer.echo(f"[goaloop] optimization [{priority}] {title}: {recommendation}")
+
+
+def _read_optimization_analysis(run_dir: Path) -> dict[str, Any]:
+    path = run_dir / OPTIMIZATION_ANALYSIS_FILENAME
+    if not path.is_file():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
 
 
 def _has_candidates(run_dir: Path) -> bool:
@@ -681,6 +741,10 @@ def _progress_line(kind: str, payload: dict[str, object]) -> str | None:
             f"reproductions={payload.get('reproductions')}"
         ),
         "report:write_started": f"step=report_write_started status={payload.get('status')}",
+        "optimization:completed": (
+            f"step=optimization_completed suggestions={payload.get('suggestions')} "
+            f"priority={payload.get('highest_priority')} top={payload.get('top_suggestion')}"
+        ),
         "report:written": f"step=report_written status={payload.get('status')}",
         "run:terminal": f"step=terminal status={payload.get('status')} reason={payload.get('reason')}",
         "run:resumed": f"step=terminal_cleared previous_status={payload.get('from_status')}",

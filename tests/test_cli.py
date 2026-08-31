@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from goaloop.cli import _dsh_trace_printer, _event_printer, app
+from goaloop.cli import _dsh_trace_printer, _evaluate_optimization, _event_printer, app
 from goaloop.models import FuzzRunRequest, GenerationGoal, Phase, RunEvent, RunState, TerminalStatus
 from goaloop.storage import ArtifactStore
 
@@ -88,11 +88,27 @@ class TestStatus:
 
     def test_valid_run_summary(self, workspace_root: Path) -> None:
         run_id = "run-cli-status"
-        _make_run(workspace_root, run_id, terminal=TerminalStatus.HARNESS_VERIFIED)
+        run_dir = _make_run(workspace_root, run_id, terminal=TerminalStatus.HARNESS_VERIFIED)
+        (run_dir / "optimization-suggestions.json").write_text(
+            json.dumps(
+                {
+                    "suggestions": [
+                        {
+                            "priority": "medium",
+                            "title": "减少候选重生成轮次",
+                            "recommendation": "固化稳定的构建知识。",
+                        }
+                    ]
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
         result = runner.invoke(app, ["status", "--run-id", run_id, "--workspace", str(workspace_root)])
         assert result.exit_code == 0
         assert "run-cli-status" in result.output
         assert "harness_verified" in result.output
+        assert "optimization [medium] 减少候选重生成轮次" in result.output
 
     def test_valid_run_json(self, workspace_root: Path) -> None:
         run_id = "run-cli-json"
@@ -163,6 +179,12 @@ class TestRun:
         assert "needs_input" in result.output
         assert "phase=preprocess step=started" in result.output
         assert "phase=preprocess step=completed" in result.output
+        assert "step=optimization_completed" in result.output
+        assert "修正任务输入与目标符号范围" in result.output
+        run_dirs = list((workspace_root / "work" / "does-not-exist" / "runs").glob("*"))
+        assert len(run_dirs) == 1
+        assert (run_dirs[0] / "optimization-suggestions.json").is_file()
+        assert (run_dirs[0] / "optimization-suggestions.md").is_file()
 
     def test_missing_source_scope_is_needs_input(self, workspace_root: Path) -> None:
         result = runner.invoke(
@@ -313,6 +335,26 @@ class TestProgressOutput:
         assert "/tmp/tools/kRepo/main.py report target_fn" in output
         assert "'/tmp/repo with space'" in output
 
+    def test_default_printer_shows_optimization_summary(self, capsys) -> None:
+        printer = _event_printer(False)
+        printer(
+            RunEvent(
+                sequence=1,
+                phase=Phase.CRASH_ANALYSIS_REPORT,
+                kind="optimization:completed",
+                payload={
+                    "suggestions": 2,
+                    "highest_priority": "high",
+                    "top_suggestion": "提高模型结构化输出稳定性",
+                },
+            )
+        )
+
+        output = capsys.readouterr().out
+        assert "step=optimization_completed" in output
+        assert "suggestions=2" in output
+        assert "提高模型结构化输出稳定性" in output
+
 
 class TestResume:
     def test_help_includes_debug(self) -> None:
@@ -424,6 +466,28 @@ class TestEvaluate:
         assert summary["parse"]["model_calls"] == 5
         assert summary["parse"]["average_model_call_seconds"] == 2.0
         assert summary["parse"]["average_estimated_input_tokens"] == 400.0
+
+    def test_optimization_aggregation(self) -> None:
+        summary = _evaluate_optimization(
+            [
+                {
+                    "function": "parse",
+                    "optimization_suggestions": [
+                        {"id": "reduce-context", "title": "压缩上下文", "priority": "medium"}
+                    ],
+                },
+                {
+                    "function": "parse",
+                    "optimization_suggestions": [
+                        {"id": "reduce-context", "title": "压缩上下文", "priority": "medium"},
+                        {"id": "fix-build", "title": "修复构建", "priority": "high"},
+                    ],
+                },
+            ]
+        )
+
+        assert summary["parse"][0]["id"] == "reduce-context"
+        assert summary["parse"][0]["runs"] == 2
 
     def test_help_includes_debug(self) -> None:
         result = runner.invoke(app, ["evaluate", "--help"])

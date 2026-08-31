@@ -56,12 +56,14 @@ session 回填结果；每轮最多 3 个查询回合、合计 6 个查询。
 |---|---|---|
 | `ValidationResult` | 验证结论 | 携带 `status`、`execution`、`crash_analysis`、`report_path` |
 | `ResearchMetrics` | 研究指标导出 | `token_source` 限 `sdk`/`unavailable`；包含阶段耗时、generation loops、格式重试，以及 DSH trace 路径、事件数、模型调用耗时/规模和工具调用计数 |
+| `OptimizationSuggestion` | 单条优化建议 | 固定 `priority`/`category`，包含证据、可执行建议和预期收益；每个 run 最多 6 条 |
+| `OptimizationAnalysis` | 自动优化分析产物 | 绑定 run 终态、指标/trace 路径、分析信号和有序建议列表；分析不调用模型 |
 
 ## 状态与持久化
 
 | 模型 | 用途 | 关键约束 |
 |---|---|---|
-| `RunState` | 全量检查点 | `phase` 四阶段枚举；`generation_loop` 为已完成轮次；`active_loop`/`loop_stage` 标记当前候选子阶段；`terminal_phase` 记录失败发生阶段；`terminal_status` 为终态；`goal` 嵌入 `GenerationGoal` |
+| `RunState` | 全量检查点 | `phase` 四阶段枚举；`generation_loop` 为已完成轮次；`active_loop`/`loop_stage` 标记当前候选子阶段；`terminal_phase` 记录失败发生阶段；`terminal_status` 为终态；`optimization_analysis_path` 指向自动分析产物；`goal` 嵌入 `GenerationGoal` |
 | `RunEvent` | 追加式事件 | `sequence` 自增；`phase` 当前阶段；`kind` 事件类型；`payload` 任意 JSON |
 | `RunContext` | 后端执行上下文 | `run_dir`/`source_root`/`candidate_dir`/`binary_name` |
 | `ExecutionLease` | 命令白名单授权 | `allowed_executables`（绝对路径）、`allowed_dirs`（目录级授权）；`commands_used` 计数；`authorize(argv)` 校验 |

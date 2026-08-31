@@ -20,6 +20,7 @@ goaloop/
 │   ├── coverage.py        # profraw 合并、llvm-cov 导出、目标函数/源码覆盖归因
 │   ├── driver.py          # DeepSeek Harness SDK 适配器 + 测试用 ScriptedGenerationDriver
 │   ├── crash.py           # sanitizer 栈归属、crash 输入最小化、独立复现
+│   ├── optimization.py    # 终态指标/trace 摘要分析、优化建议生成
 │   ├── redaction.py       # 日志/研究导出脱敏（凭据、路径、用户名）
 │   ├── report.py          # Markdown/JSON 报告、验证结果、研究指标
 │   ├── workflow/          # 四阶段控制器（controller/generation/report mixin）
@@ -71,3 +72,5 @@ goaloop run --repo repos/cJSON-1.7.17 --source cJSON.c --function cJSON_Parse --
 - **断点恢复**：每个阶段转换 + 核心事件写入 `events.jsonl` 和 `state.json`，支持 `resume` 续跑，不重复执行已完成的证据。
 - **严格 JSON 防陈旧**：模型响应必须携带 `schema_version`、`run_id`、`phase`、`generation_loop`，控制器验证一致后才采纳；字段不匹配立即拒绝，防止旧轮次/跨 run 响应被错误应用。
 - **单次格式修复重试**：JSON 解析或 schema 校验失败仅允许一次携带精确错误信息的重试；再次失败终止本轮生成。
+- **默认终态优化分析**：每个终态 run 都根据 `research-metrics.json`、DSH trace 摘要、
+  执行结果和终态原因生成有证据的优化建议；分析器不再调用模型，结果可重复、可审计。
