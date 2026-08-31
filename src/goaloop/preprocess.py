@@ -28,20 +28,13 @@ from .models import (
 
 SOURCE_SUFFIXES = {".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx"}
 BUILD_NAMES = {"CMakeLists.txt", "Makefile", "meson.build", "BUILD", "BUILD.bazel"}
-# Per-tier per-file caps for the source context embedded in generation
-# prompts. Definition files (the target function's body lives there) get the
-# most room; include-closure and same-basename headers get less; build files
-# and caller/reference files the least.
+# Per-tier caps for the minimal source context embedded in generation prompts.
 MAX_TARGET_FILE_BYTES = 64 * 1024
-MAX_DEPENDENCY_FILE_BYTES = 32 * 1024
-MAX_BUILD_FILE_BYTES = 16 * 1024
 MAX_CALL_TREE_BYTES = 16 * 1024
 MAX_PARAM_CONSTRAINT_BYTES = 16 * 1024
 # Fallback total context budget when the caller does not pass one; the
 # controller always derives it from FuzzRunRequest.max_context_kb.
 MAX_CONTEXT_TOTAL_BYTES = 256 * 1024
-# Quoted-include parser used to build the dependency closure of target files.
-_INCLUDE_QUOTED_RE = re.compile(r'^\s*#\s*include\s+"([^"]+)"', re.MULTILINE)
 # A definition is `symbol(` ... `)` followed (possibly across lines) by a
 # body opening brace; a mere call site or declaration does not qualify.
 _DEFINITION_RE_TEMPLATE = r"(?<![\w:]){symbol}\s*\([^;{{}}]*\)\s*\{{"
@@ -248,13 +241,8 @@ def preprocess_request(
     contexts = _collect_context(
         repo_root,
         definitions,
-        files,
         krepo_report,
         max_context_bytes,
-        # In --build-dir mode the controller builds the project itself, so
-        # build-file contents are redundant (the model cannot read files and
-        # must not guess build parameters); the resolved path is enough.
-        include_build_files=request.build_dir is None,
     )
     signatures = _candidate_signatures(matching, request.function)
     scope_kind = "file" if source_scope.is_file() else "directory"
@@ -366,12 +354,10 @@ def _detect_language(requested: Language, matches: list[Path], files: list[Path]
 def _collect_context(
     root: Path,
     definitions: list[Path],
-    files: list[Path],
     krepo_report: KRepoReport,
     max_context_bytes: int | None = None,
-    include_build_files: bool = True,
 ) -> list[SourceContext]:
-    """Collect the kRepo target data, then related headers and build files."""
+    """Collect only the minimal kRepo target, call-tree, and parameter context."""
     budget = MAX_CONTEXT_TOTAL_BYTES if max_context_bytes is None else max_context_bytes
     result: list[SourceContext] = []
     total = 0
@@ -410,34 +396,6 @@ def _collect_context(
         cap=min(param_cap, budget - total),
     )
 
-    dependencies = _include_closure(root, definitions, files) + _same_basename_headers(definitions, files)
-    selected: list[tuple[Path, int, SourceContextKind]] = [
-        (path, MAX_DEPENDENCY_FILE_BYTES, "dependency") for path in dependencies
-    ]
-    if include_build_files:
-        selected.extend((path, MAX_BUILD_FILE_BYTES, "build") for path in files if path.name in BUILD_NAMES)
-    seen: set[Path] = set()
-    for path, per_file_cap, kind in selected:
-        resolved = path.resolve()
-        if resolved in seen or total >= budget:
-            continue
-        seen.add(resolved)
-        try:
-            raw = resolved.read_bytes()
-        except OSError:
-            continue
-        available = min(per_file_cap, budget - total)
-        content = raw[:available].decode("utf-8", errors="replace")
-        result.append(
-            SourceContext(
-                kind=kind,
-                path=resolved.relative_to(root).as_posix(),
-                sha256=hashlib.sha256(raw).hexdigest(),
-                content=content,
-                truncated=len(raw) > available,
-            )
-        )
-        total += min(len(raw), available)
     return result
 
 
@@ -500,72 +458,6 @@ def _definition_files(matches: list[Path], symbol: str | None) -> tuple[list[Pat
             continue
         (definitions if pattern.search(text) else references).append(path)
     return definitions, references
-
-
-def _include_closure(root: Path, seeds: list[Path], files: list[Path]) -> list[Path]:
-    """Transitive closure of quoted #include targets of the seed files.
-
-    Only files inside the source root count; system/angle-bracket includes
-    are ignored. A name lookup over the collected source files is the last
-    resort for includes that resolve via include dirs rather than relative
-    paths.
-    """
-    root = root.resolve()
-    by_name: dict[str, Path] = {}
-    for path in files:
-        if path.suffix.lower() in SOURCE_SUFFIXES:
-            by_name.setdefault(path.name, path)
-    found: set[Path] = set()
-    visited: set[Path] = set()
-    queue = [path.resolve() for path in seeds if path.suffix.lower() in SOURCE_SUFFIXES]
-    while queue:
-        current = queue.pop(0)
-        if current in visited:
-            continue
-        visited.add(current)
-        try:
-            text = current.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            continue
-        for include in _INCLUDE_QUOTED_RE.findall(text):
-            target = _resolve_include(root, current.parent, include, by_name)
-            if target is None or target in visited:
-                continue
-            queue.append(target)
-            found.add(target)
-    return sorted(found, key=lambda path: path.as_posix())
-
-
-def _resolve_include(root: Path, from_dir: Path, include: str, by_name: dict[str, Path]) -> Path | None:
-    for candidate in (from_dir / include, root / include):
-        resolved = candidate.resolve()
-        if resolved.is_relative_to(root) and resolved.is_file():
-            return resolved
-    named = by_name.get(Path(include).name)
-    if named is not None:
-        resolved = named.resolve()
-        if resolved.is_relative_to(root):
-            return resolved
-    return None
-
-
-def _same_basename_headers(matches: list[Path], files: list[Path]) -> list[Path]:
-    """Headers sharing the basename of a target file (e.g. cJSON.c -> cJSON.h).
-
-    Covers implementations that declare their API in a header they do not
-    include themselves; also the reason the file contains the symbol may be a
-    definition while the header only carries the declaration without it.
-    """
-    by_stem: dict[str, Path] = {}
-    for path in files:
-        if path.suffix.lower() in SOURCE_SUFFIXES and path.suffix.lower().startswith(".h"):
-            by_stem.setdefault(path.stem, path)
-    headers: set[Path] = set()
-    for match in matches:
-        header = by_stem.get(match.stem)
-        if header is not None and header.resolve() != match.resolve():
-            headers.add(header.resolve())
-    return sorted(headers, key=lambda path: path.as_posix())
 
 
 def _candidate_signatures(matches: list[Path], symbol: str) -> list[str]:

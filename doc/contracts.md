@@ -15,7 +15,7 @@
 | 模型 | 用途 | 关键约束 |
 |---|---|---|
 | `PreprocessResult` | 预处理输出 | `source_root` 为仓库边界，`source_scope` 为符号搜索范围；`candidate_signatures` 是范围内启发式提取的声明/定义（头文件声明、实现或重载可产生多个成员，最多 10 个）；`ready` 与 `terminal_status` 互斥 |
-| `SourceContext` | 函数级上下文 + SHA-256 | `kind` 区分 `target_function`/`incoming_tree`/`outgoing_tree`/`param_constraints`/`dependency`/`build`；目标片段带 `start_line`/`end_line`；`path` 必须相对、无 `..`、无 `\\`；`truncated` 标记预算截断 |
+| `SourceContext` | 基础函数上下文 + SHA-256 | `kind` 仅允许 `target_function`/`incoming_tree`/`outgoing_tree`/`param_constraints`；目标片段带 `start_line`/`end_line`；`path` 必须相对、无 `..`、无 `\\`；`truncated` 标记预算截断 |
 | `CapabilityReport` / `Capability` | 工具链能力探测 | `ready` 属性 = 全部 `available` |
 
 ## 生成阶段
@@ -28,6 +28,10 @@
 | `GeneratedFile` | 单个生成文件 | `path` 必须相对；`content` ≤ 1,000,000 字符 |
 | `GeneratedArtifactSet` | 模型响应（每轮） | `files` 4–64 个且路径唯一；`candidate_ready` 必须 `True`；必须携带 `schema_version`/`run_id`/`phase`/`generation_loop` |
 | `GenerationFeedback` | 反馈给模型的执行证据 | `category`、`summary`、`log_excerpt`（已脱敏）、`artifact_hashes` |
+
+generation 可在最终 `GeneratedArtifactSet` 前返回临时 `krepo_query` 对象，请求 kRepo
+`symbol` 查询非函数符号。该对象不是持久化业务契约：控制器校验白名单后执行并在同一
+session 回填结果；每轮最多 3 个查询回合、合计 6 个查询。
 
 ## 执行阶段
 

@@ -227,6 +227,8 @@ class TestPrompt:
         assert "GeneratedArtifactSet" in prompt
         assert '"run_id"' in prompt
         assert "generation loop 1" in prompt
+        assert '"type":"krepo_query"' in prompt
+        assert "non-function dependency" in prompt
 
     def test_retry_prompt_carries_error(self) -> None:
         prompt = build_format_retry_prompt("base", ValueError("bad json"), expected_loop=2)
@@ -336,6 +338,56 @@ class TestDeepSeekHarnessDriver:
         artifacts = driver.generate_artifacts(goal=_goal(), preprocess=_preprocess(), feedback=None)
         assert artifacts.generation_loop == 1
         assert driver.format_retries == 0
+
+    def test_generation_resolves_on_demand_krepo_query_in_same_session(self, tmp_path) -> None:
+        query_request = {
+            "type": "krepo_query",
+            "reason": "need the packet layout",
+            "queries": [{"operation": "symbol", "symbol": "packet_t", "kind": "typedef"}],
+        }
+
+        class FakeQueryService:
+            def query(self, query, *, on_command=None):
+                if on_command is not None:
+                    on_command(["python", "kRepo/main.py", "symbol", query.symbol])
+                return {"ok": True, "output": "typedef struct packet packet_t;"}
+
+        traces: list[tuple[str, dict]] = []
+        driver = _real_driver()
+        driver.configure_run(run_dir=tmp_path / "run")
+        driver._krepo_service = FakeQueryService()  # type: ignore[assignment]
+        driver.on_trace = lambda method, payload: traces.append((method, payload))
+        harness = FakeHarness([json.dumps(query_request), json.dumps(_live_payload())])
+        driver._harness = harness
+
+        artifacts = driver.generate_artifacts(goal=_goal(), preprocess=_preprocess(), feedback=None)
+
+        assert artifacts.generation_loop == 1
+        assert [session for _, session in harness.calls] == ["run-live-g01", "run-live-g01"]
+        assert "typedef struct packet packet_t" in harness.calls[1][0]
+        assert any(method == "goaloop.krepo_query.command" for method, _ in traces)
+
+    def test_generation_rejects_excess_krepo_queries(self, tmp_path) -> None:
+        query_request = {
+            "type": "krepo_query",
+            "queries": [
+                {"operation": "symbol", "symbol": "ONE"},
+                {"operation": "symbol", "symbol": "TWO"},
+                {"operation": "symbol", "symbol": "THREE"},
+            ],
+        }
+
+        class FakeQueryService:
+            def query(self, query, *, on_command=None):
+                return {"ok": True, "output": query.symbol}
+
+        driver = _real_driver()
+        driver.configure_run(run_dir=tmp_path / "run")
+        driver._krepo_service = FakeQueryService()  # type: ignore[assignment]
+        driver._harness = FakeHarness([json.dumps(query_request)] * 3)
+
+        with pytest.raises(GenerationFailure, match="query budget"):
+            driver.generate_artifacts(goal=_goal(), preprocess=_preprocess(), feedback=None)
 
     def test_streams_sdk_notifications_to_trace_callback(self) -> None:
         traces: list[tuple[str, dict]] = []

@@ -79,7 +79,7 @@ src/goaloop/
 ├── models.py          # Pydantic 数据契约
 ├── config.py          # 验证/模型 Profile 加载
 ├── preprocess.py      # 源码范围、符号查找、上下文收集、能力探测
-├── krepo.py           # kRepo 只读子进程适配器（函数片段 + 上下游调用树）
+├── krepo.py           # kRepo 只读适配器（基础报告 + generation 按需符号查询）
 ├── storage.py         # run 目录、原子写入、事件日志、候选物化
 ├── validation.py      # 工件策略、编译/fuzz argv、指标解析、决策
 ├── backend.py         # LocalLinuxBackend：执行、资源限制、可选沙箱
@@ -92,11 +92,15 @@ src/goaloop/
 ```
 
 第三方工具 `tools/kRepo/` 以 Git 子模块固定版本引入；goaloop 不修改其源码，也不调用
-会生成源码包的命令，仅读取 `main.py report --format json` 的标准输出。可用
+会生成源码包的命令。preprocess 读取 `main.py report --format json`，generation 可按需读取
+`main.py symbol` 的标准输出。可用
 `GOALOOP_KREPO` 指向其他 kRepo 根目录或新版入口脚本 `main.py`。
 适配不依赖 kRepo 的 `schema_version`；只提取 `source`、上下游调用树和
 `param_constraints` 四项业务内容，并写入 `preprocess.json` 的 `contexts`。
-执行 kRepo 前，Terminal 会输出完整的 `main.py report ... --format json` 命令。
+dependency 和构建文件内容不进入 `preprocess.json`；模型在 generation 中通过受控
+`krepo_query` 协议查询非函数符号。查询限制为每轮最多 6 次、每次请求最多 3 个，
+结果按 16 KiB 截断、缓存并审计到 run 目录的 `krepo-queries/`。`--debug` 会显示查询命令。
+执行 preprocess kRepo 前，Terminal 会输出完整的 `main.py report ... --format json` 命令。
 
 ## 文档
 

@@ -316,8 +316,8 @@ def test_context_budget_default_applies(workspace_root: Path, default_profile: o
 
 
 def test_complex_project_skips_unrelated_files(workspace_root: Path, default_profile: object) -> None:
-    # A large project: the target file, its include closure, and many
-    # unrelated files. Only relevant files may enter preprocess.json.
+    # A large project with dependencies and unrelated files. Only the four
+    # baseline kRepo contexts may enter preprocess.json.
     src = workspace_root / "repos" / "complex"
     _write(
         src,
@@ -337,15 +337,20 @@ def test_complex_project_skips_unrelated_files(workspace_root: Path, default_pro
         check_runtime=False,
     )
     paths = [ctx.path for ctx in result.contexts]
-    assert "src/target.c" in paths
-    assert "src/dep.h" in paths  # include closure
+    assert paths == [
+        "src/target.c",
+        "analysis/incomingTree.json",
+        "analysis/outgoingTree.json",
+        "analysis/param_constraints.json",
+    ]
+    assert "src/dep.h" not in paths
     assert "src/dep.c" not in paths  # neither a match nor included
     assert "src/unrelated.c" not in paths
     assert "tests/test_other.c" not in paths
     assert "docs/notes.c" not in paths
 
 
-def test_include_closure_is_transitive(workspace_root: Path, default_profile: object) -> None:
+def test_transitive_includes_are_not_embedded(workspace_root: Path, default_profile: object) -> None:
     src = workspace_root / "repos" / "chain"
     _write(src, "src/target.c", '#include "a.h"\nint tgt(const uint8_t *d, size_t s) { return a_get(d[0]); }\n')
     _write(src, "src/a.h", '#include "b.h"\nint a_get(unsigned char c);\n')
@@ -358,11 +363,17 @@ def test_include_closure_is_transitive(workspace_root: Path, default_profile: ob
         check_runtime=False,
     )
     paths = [ctx.path for ctx in result.contexts]
-    assert "src/a.h" in paths
-    assert "src/b.h" in paths
+    assert "src/a.h" not in paths
+    assert "src/b.h" not in paths
+    assert {ctx.kind for ctx in result.contexts} == {
+        "target_function",
+        "incoming_tree",
+        "outgoing_tree",
+        "param_constraints",
+    }
 
 
-def test_same_basename_header_included_without_symbol(workspace_root: Path, default_profile: object) -> None:
+def test_same_basename_header_is_not_embedded(workspace_root: Path, default_profile: object) -> None:
     src = workspace_root / "repos" / "noinc"
     _write(
         src,
@@ -380,7 +391,7 @@ def test_same_basename_header_included_without_symbol(workspace_root: Path, defa
     )
     paths = [ctx.path for ctx in result.contexts]
     assert "src/target.c" in paths
-    assert "src/target.h" in paths
+    assert "src/target.h" not in paths
 
 
 def test_large_target_file_keeps_only_raw_function_fragment(workspace_root: Path, default_profile: object) -> None:
@@ -475,14 +486,12 @@ def test_build_dir_mode_excludes_build_files(workspace_root: Path, default_profi
     assert result.build_dir == src.resolve()
     paths = [ctx.path for ctx in result.contexts]
     assert "src/target.c" in paths
-    assert "include/target.h" in paths
-    # Build-file contents are redundant when the controller builds the
-    # project itself: only the resolved path is exposed.
+    assert "include/target.h" not in paths
     assert "CMakeLists.txt" not in paths
     assert not any(ctx.path in {"CMakeLists.txt", "Makefile"} for ctx in result.contexts)
 
 
-def test_no_build_dir_keeps_build_files(workspace_root: Path, default_profile: object) -> None:
+def test_no_build_dir_still_excludes_build_files(workspace_root: Path, default_profile: object) -> None:
     (workspace_root / "repos" / "safe" / "Makefile").write_text(
         "all:\n\tclang -o fuzzer src/safe.c\n", encoding="utf-8"
     )
@@ -496,4 +505,4 @@ def test_no_build_dir_keeps_build_files(workspace_root: Path, default_profile: o
     assert result.build_dir is None
     paths = [ctx.path for ctx in result.contexts]
     assert "src/safe.c" in paths
-    assert "Makefile" in paths  # the model must infer build params on its own
+    assert "Makefile" not in paths

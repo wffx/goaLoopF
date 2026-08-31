@@ -100,6 +100,12 @@ FuzzRunRequest ──► preprocess ──► kRepo report（只读 BROWSE.VC.DB
                                       ▼
                               PreprocessResult ──► driver.generate_artifacts()
                                                           │
+                                         dependency 需要时返回 krepo_query
+                                                          │
+                                      控制器只读 kRepo symbol + 缓存/审计
+                                                          │
+                                      结果回填同一 generation session
+                                                          │
                                                           ▼
                                               GeneratedArtifactSet（JSON）
                                                           │

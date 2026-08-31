@@ -2,12 +2,20 @@
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
 import pytest
 
-from goaloop.krepo import KRepoError, krepo_cli_path, read_krepo_report
+from goaloop.krepo import (
+    KRepoError,
+    KRepoQueryService,
+    KRepoSymbolQuery,
+    krepo_cli_path,
+    query_krepo_symbol,
+    read_krepo_report,
+)
 
 
 def _write_cli(path: Path, payload: object, *, exit_code: int = 0) -> None:
@@ -139,3 +147,58 @@ def test_requires_param_constraints(tmp_path: Path, monkeypatch: pytest.MonkeyPa
 
     with pytest.raises(KRepoError, match="param_constraints"):
         read_krepo_report(workspace, repo, source, "target_fn")
+
+
+def test_queries_symbol_with_bounded_read_only_command(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    repo = workspace / "repo"
+    repo.mkdir(parents=True)
+    cli = tmp_path / "symbol-krepo.py"
+    _write_cli(cli, {"symbol": "packet_t", "candidates": [{"snippet": "typedef int packet_t;"}]})
+    monkeypatch.setenv("GOALOOP_KREPO", str(cli))
+    commands: list[list[str]] = []
+
+    output = query_krepo_symbol(
+        workspace,
+        repo,
+        "packet_t",
+        kind="typedef",
+        file_filter="include/packet.h",
+        on_command=commands.append,
+    )
+
+    assert "typedef int packet_t" in output
+    assert commands[0][:4] == [sys.executable, str(cli.resolve()), "symbol", "packet_t"]
+    assert commands[0][-4:] == ["--kind", "typedef", "--file", "include/packet.h"]
+
+
+@pytest.mark.parametrize("file_filter", ["../secret.h", "/etc/passwd", "a/../../secret.h"])
+def test_symbol_query_rejects_unsafe_file_filter(
+    tmp_path: Path, file_filter: str
+) -> None:
+    with pytest.raises(KRepoError, match="unsafe kRepo file filter"):
+        query_krepo_symbol(tmp_path, tmp_path, "packet_t", file_filter=file_filter)
+
+
+def test_query_service_caches_and_audits_identical_queries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    repo = workspace / "repo"
+    repo.mkdir(parents=True)
+    cli = tmp_path / "cached-krepo.py"
+    _write_cli(cli, {"symbol": "LIMIT", "candidates": [{"snippet": "#define LIMIT 8"}]})
+    monkeypatch.setenv("GOALOOP_KREPO", str(cli))
+    commands: list[list[str]] = []
+    service = KRepoQueryService(workspace, repo, tmp_path / "run" / "krepo-queries")
+    query = KRepoSymbolQuery(symbol="LIMIT", kind="macro")
+
+    first = service.query(query, on_command=commands.append)
+    second = service.query(query, on_command=commands.append)
+
+    assert first == second
+    assert len(commands) == 1
+    audit = [json.loads(line) for line in service.audit_path.read_text(encoding="utf-8").splitlines()]
+    assert [entry["cache_hit"] for entry in audit] == [False, True]

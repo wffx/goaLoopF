@@ -165,6 +165,7 @@ class RunController(GenerationMixin, ReportMixin):
         project_name = run_dir.parent.parent.name
         self.store = ArtifactStore(self.workspace_root, project_name, run_id, output_root=self.output_root)
         self.store.acquire_lock()
+        self.driver.configure_run(run_dir=self.store.run_dir)
         self.state = self.store.load_state()
         self.request = self.state.request
         self.goal = self.state.goal
@@ -321,6 +322,7 @@ class RunController(GenerationMixin, ReportMixin):
             target_store.acquire_lock()
             self.store = target_store
         self.store.initialize()
+        self.driver.configure_run(run_dir=self.store.run_dir)
         self._seed_corpus()
         self._persist_preprocess()
         duration = round(time.monotonic() - started, 3)

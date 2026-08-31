@@ -208,6 +208,26 @@ class TestExecutionLease:
 
 
 class TestPreprocessResult:
+    def test_resume_discards_legacy_dependency_and_build_contexts(self) -> None:
+        payload = {
+            "run_id": "r",
+            "ready": True,
+            "project_name": "p",
+            "source_root": "/x",
+            "language": "c",
+            "target_function": "f",
+            "capability_report": {"platform": "Linux", "capabilities": []},
+            "contexts": [
+                {"kind": "dependency", "path": "dep.h", "sha256": "0" * 64, "content": "old"},
+                {"kind": "build", "path": "Makefile", "sha256": "1" * 64, "content": "old"},
+                {"kind": "target_function", "path": "f.c", "sha256": "2" * 64, "content": "int f();"},
+            ],
+        }
+
+        result = PreprocessResult.model_validate(payload)
+
+        assert [context.kind for context in result.contexts] == ["target_function"]
+
     def test_ready_cannot_be_terminal(self) -> None:
         with pytest.raises(ValidationError):
             PreprocessResult(

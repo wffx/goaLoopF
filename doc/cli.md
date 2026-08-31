@@ -221,14 +221,18 @@ openrouter/xai）+ 手写 OpenAI 兼容网关。自定义网关端点/模型名�
   1. kRepo `report --format json` 返回的目标函数原始实现片段，最多占预算的 1/2；
   2. `incoming_tree` 和 `outgoing_tree` 调用树，各最多占预算的 1/5；
   3. `param_constraints` 参数约束，最多占预算的 1/10；
-  4. 定义文件的 quoted-include 传递闭包和同 basename 头，每文件最多 32 KiB；
-  5. 构建文件每文件最多 16 KiB；`--build-dir` 模式仍不注入构建文件。
 
-  原调用/引用文件不再整文件进入 prompt，调用关系由两棵去重调用树代替。
+  dependency 头文件、调用/引用文件和构建文件都不再进入 `preprocess.json`。
+  调用关系由两棵去重调用树代替。
+- **dependency 按需查询**：generation 模型需要宏、typedef、enum、变量、struct 或
+  union 时，可返回临时 `krepo_query` 请求。控制器仅执行 kRepo `symbol`，仓库边界
+  由 preprocess 绑定；每次最多 3 个、每轮最多 6 个、最多 3 个回合，单结果最多
+  16 KiB。相同请求跨 generation loop/resume 命中持久化缓存，查询与结果记录在
+  `<run-dir>/krepo-queries/queries.jsonl`，缓存位于其 `cache/`；`--debug` 显示命令。
 - **kRepo 前置条件**：初始化 `tools/kRepo` 子模块，并用 VS Code C/C++ 扩展为
-  被测仓生成 `.vscode/BROWSE.VC.DB`。goaloop 只执行只读统一报告，不调用
-  `source`/`outgoingFuncs` 等写文件命令。执行前 Terminal 会输出完整、可复制的
-  kRepo `report` 命令；缺少工具或数据库时 run 进入 `blocked`。
+  被测仓生成 `.vscode/BROWSE.VC.DB`。goaloop 只执行只读 `report`/`symbol`，不调用
+  `source`/`outgoingFuncs` 等写文件命令。preprocess 执行前 Terminal 会输出完整、
+  可复制的 kRepo `report` 命令；缺少工具或数据库时 run 进入 `blocked`。
 - **会话不再跨轮累积**：每一轮生成使用独立 session（`<run-id>-gNN`），
   提示词只出现一次；结构化 `latest_feedback` 携带两轮之间的差异。旧实现所有
   轮共用同一 session，第 N 轮的输入 ≈ N 份源码上下文 + 历史回复，第 2~3 轮

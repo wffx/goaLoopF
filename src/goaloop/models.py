@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -218,12 +218,12 @@ class CapabilityReport(Contract):
 
 
 SourceContextKind = Literal[
-    "target_function", "incoming_tree", "outgoing_tree", "param_constraints", "dependency", "build"
+    "target_function", "incoming_tree", "outgoing_tree", "param_constraints"
 ]
 
 
 class SourceContext(Contract):
-    kind: SourceContextKind = "dependency"
+    kind: SourceContextKind = "target_function"
     path: str
     sha256: str
     content: str
@@ -258,6 +258,20 @@ class PreprocessResult(Contract):
     # are excluded from contexts, so this path is the only build info the
     # model receives (it cannot read files anyway).
     build_dir: Path | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def discard_legacy_bulk_contexts(cls, value: Any) -> Any:
+        """Let resume load older runs without re-injecting dependency/build contents."""
+        if not isinstance(value, dict) or not isinstance(value.get("contexts"), list):
+            return value
+        migrated = dict(value)
+        migrated["contexts"] = [
+            context
+            for context in value["contexts"]
+            if not isinstance(context, dict) or context.get("kind") not in {"dependency", "build"}
+        ]
+        return migrated
 
     @model_validator(mode="after")
     def terminal_state_matches_readiness(self) -> PreprocessResult:
