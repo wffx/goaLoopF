@@ -47,7 +47,6 @@ class KRepoSymbolQuery:
 
     symbol: str
     kind: str | None = None
-    file: str | None = None
 
 
 class KRepoQueryService:
@@ -59,11 +58,13 @@ class KRepoQueryService:
         repo_root: Path,
         audit_root: Path,
         target_function: str,
+        target_file: str,
     ) -> None:
         self.workspace_root = workspace_root.resolve()
         self.repo_root = repo_root.resolve()
         self.audit_root = audit_root.resolve()
         self.target_function = target_function
+        self.target_file = _validate_file_filter(target_file)
         self.cache_dir = self.audit_root / "cache"
         self.audit_path = self.audit_root / "queries.jsonl"
 
@@ -74,7 +75,7 @@ class KRepoQueryService:
         on_command: Callable[[list[str]], None] | None = None,
     ) -> dict[str, object]:
         normalized = _validate_symbol_query(query)
-        cache_key = _query_cache_key(normalized, self.target_function)
+        cache_key = _query_cache_key(normalized, self.target_function, self.target_file)
         cache_path = self.cache_dir / f"{cache_key}.json"
         cached = _read_cached_query(cache_path)
         if cached is not None:
@@ -94,8 +95,8 @@ class KRepoQueryService:
                 self.repo_root,
                 normalized.symbol,
                 function=self.target_function,
+                file_filter=self.target_file,
                 kind=normalized.kind,
-                file_filter=normalized.file,
                 on_command=capture_command,
             )
             result: dict[str, object] = {"ok": True, "output": output}
@@ -133,7 +134,7 @@ class KRepoQueryService:
                 "symbol": query.symbol,
                 "function": self.target_function,
                 "kind": query.kind,
-                "file": query.file,
+                "file": self.target_file,
             },
             "cache_hit": cache_hit,
             "command_executed": command is not None,
@@ -245,14 +246,15 @@ def query_krepo_symbol(
     symbol: str,
     *,
     function: str,
+    file_filter: str,
     kind: str | None = None,
-    file_filter: str | None = None,
     timeout_seconds: int = KREPO_QUERY_TIMEOUT_SECONDS,
     max_chars: int = KREPO_QUERY_MAX_CHARS,
     on_command: Callable[[list[str]], None] | None = None,
 ) -> str:
     """Run kRepo's read-only ``symbol`` command with controller-owned limits."""
-    query = _validate_symbol_query(KRepoSymbolQuery(symbol=symbol, kind=kind, file=file_filter))
+    query = _validate_symbol_query(KRepoSymbolQuery(symbol=symbol, kind=kind))
+    normalized_file_filter = _validate_file_filter(file_filter)
     cli = krepo_cli_path(workspace_root)
     if not cli.is_file():
         raise KRepoError(
@@ -268,11 +270,11 @@ def query_krepo_symbol(
         str(repo_root.resolve()),
         "--function",
         function,
+        "--file",
+        normalized_file_filter,
     ]
     if query.kind is not None:
         command.extend(["--kind", query.kind])
-    if query.file is not None:
-        command.extend(["--file", query.file])
     environment = _subprocess_environment()
     if on_command is not None:
         on_command(command.copy())
@@ -309,23 +311,26 @@ def _validate_symbol_query(query: KRepoSymbolQuery) -> KRepoSymbolQuery:
     kind = query.kind.strip().lower() if query.kind is not None else None
     if kind is not None and kind not in KREPO_QUERY_KINDS:
         raise KRepoError(f"unsupported kRepo symbol kind: {query.kind!r}")
-    file_filter = query.file.strip().replace("\\", "/") if query.file is not None else None
-    if file_filter is not None:
-        path = Path(file_filter)
-        if not file_filter or path.is_absolute() or ".." in path.parts or "\x00" in file_filter:
-            raise KRepoError(f"unsafe kRepo file filter: {query.file!r}")
-        if len(file_filter) > 512:
-            raise KRepoError("kRepo file filter is too long")
-    return KRepoSymbolQuery(symbol=symbol, kind=kind, file=file_filter)
+    return KRepoSymbolQuery(symbol=symbol, kind=kind)
 
 
-def _query_cache_key(query: KRepoSymbolQuery, target_function: str) -> str:
+def _validate_file_filter(file_filter: str) -> str:
+    normalized = file_filter.strip().replace("\\", "/")
+    path = Path(normalized)
+    if not normalized or path.is_absolute() or ".." in path.parts or "\x00" in normalized:
+        raise KRepoError(f"unsafe kRepo file filter: {file_filter!r}")
+    if len(normalized) > 512:
+        raise KRepoError("kRepo file filter is too long")
+    return normalized
+
+
+def _query_cache_key(query: KRepoSymbolQuery, target_function: str, target_file: str) -> str:
     payload = json.dumps(
         {
             "symbol": query.symbol,
             "function": target_function,
             "kind": query.kind,
-            "file": query.file,
+            "file": target_file,
         },
         ensure_ascii=False,
         sort_keys=True,

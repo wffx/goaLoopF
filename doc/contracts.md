@@ -31,7 +31,8 @@
 
 generation 可在最终 `GeneratedArtifactSet` 前返回临时 `krepo_query` 对象，请求 kRepo
 `symbol` 查询非函数符号。该对象不是持久化业务契约：控制器校验白名单后执行并在同一
-session 回填结果；每轮最多 3 个查询回合、合计 6 个查询。
+session 回填结果；`--repo`、`--function`、`--file` 均由 preprocess 上下文绑定，模型
+不能覆盖；每轮最多 3 个查询回合、合计 6 个查询。
 
 ## 执行阶段
 

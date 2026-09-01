@@ -264,7 +264,8 @@ openrouter/xai）+ 手写 OpenAI 兼容网关。自定义网关端点/模型名�
   由 preprocess 绑定；每次最多 3 个、每轮最多 6 个、最多 3 个回合，单结果最多
   16 KiB。相同请求跨 generation loop/resume 命中持久化缓存，查询与结果记录在
   `<run-dir>/krepo-queries/queries.jsonl`，其中包含实际 `command`、`argv` 和 `cwd`，
-  包括执行失败的命令。实际 `symbol` 命令固定附加 `--function <目标函数>`，不再传递
+  包括执行失败的命令。实际 `symbol` 命令固定附加 `--repo <代码仓>`、
+  `--function <目标函数>` 和 `--file <目标函数实现文件>`，不再传递
   `--max-candidates`、`--max-snippet-lines`；缓存位于其 `cache/`，`--debug` 同时显示命令。
 - **kRepo 前置条件**：初始化 `tools/kRepo` 子模块，并用 VS Code C/C++ 扩展为
   被测仓生成 `.vscode/BROWSE.VC.DB`。goaloop 只执行只读 `report`/`symbol`，不调用

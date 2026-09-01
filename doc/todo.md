@@ -22,13 +22,13 @@
 
 - `symbol`：必填，非函数符号名；
 - `kind`：可选，限定 macro、typedef、enum、variable、struct、union 等类型；
-- `file`：可选，仓库内相对路径提示，用于消除同名候选歧义；
+- `file`：不向模型开放，由 controller 固定绑定目标函数实现文件；
 - 不提供 `repo`、命令、输出路径等参数，仓库和 run 目录必须由控制器绑定。
 
 ### 安全边界
 
 - 仅调用 kRepo `symbol`，不开放 Bash、任意文件读取、网络或写文件命令；
-- 复用 `KRepoQueryService` 的符号/kind/path 白名单；
+- 复用 `KRepoQueryService` 的符号/kind/path 白名单，并固定注入目标实现文件；
 - 保留每轮最多 3 个回合、合计 6 次查询的控制器预算；
 - 保留 16 KiB 单结果截断、120 秒超时、持久化缓存和 JSONL 审计；
 - kRepo 输出继续按不可信仓库数据处理，不能成为模型指令；
@@ -49,7 +49,7 @@
 - DSH 每轮都能从原生 Tool Schema 获得稳定的工具名称和参数定义；
 - trace 中出现标准工具调用和工具结果事件；
 - 模型无需输出 `type: "krepo_query"` 即可查询 dependency；
-- 非法 symbol/kind/file、越界 repo 和超预算调用均被拒绝；
+- 非法 symbol/kind、无效目标实现文件、越界 repo 和超预算调用均被拒绝；
 - 相同查询跨 generation loop 和 resume 命中既有缓存；
 - `preprocess.json` 仍只包含目标函数、调用树和参数约束；
 - 移除旧文本协议后，现有 generation、格式重试和 resume 测试全部通过。

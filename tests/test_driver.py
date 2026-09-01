@@ -229,6 +229,7 @@ class TestPrompt:
         assert "generation loop 1" in prompt
         assert '"type":"krepo_query"' in prompt
         assert "non-function dependency" in prompt
+        assert "always binds --repo, --function, and --file" in prompt
 
     def test_build_dir_prompt_requires_only_harness(self) -> None:
         preprocess = _preprocess().model_copy(update={"build_dir": "/tmp/ws/repos/safe"})

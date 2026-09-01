@@ -173,10 +173,17 @@ def test_queries_symbol_with_bounded_read_only_command(
 
     assert "typedef int packet_t" in output
     assert commands[0][:4] == [sys.executable, str(cli.resolve()), "symbol", "packet_t"]
-    assert commands[0][4:8] == ["--repo", str(repo.resolve()), "--function", "parse_packet"]
+    assert commands[0][4:10] == [
+        "--repo",
+        str(repo.resolve()),
+        "--function",
+        "parse_packet",
+        "--file",
+        "include/packet.h",
+    ]
     assert "--max-candidates" not in commands[0]
     assert "--max-snippet-lines" not in commands[0]
-    assert commands[0][-4:] == ["--kind", "typedef", "--file", "include/packet.h"]
+    assert commands[0][-2:] == ["--kind", "typedef"]
 
 
 @pytest.mark.parametrize("file_filter", ["../secret.h", "/etc/passwd", "a/../../secret.h"])
@@ -208,6 +215,7 @@ def test_query_service_caches_and_audits_identical_queries(
         repo,
         tmp_path / "run" / "krepo-queries",
         "parse_config",
+        "src/config.c",
     )
     query = KRepoSymbolQuery(symbol="LIMIT", kind="macro")
 
@@ -223,6 +231,7 @@ def test_query_service_caches_and_audits_identical_queries(
     assert audit[0]["command"] == shlex.join(commands[0])
     assert audit[0]["cwd"] == str(repo.resolve())
     assert audit[0]["query"]["function"] == "parse_config"
+    assert audit[0]["query"]["file"] == "src/config.c"
     assert audit[1]["command_executed"] is False
     assert audit[1]["command"] is None
     assert audit[1]["argv"] is None
@@ -240,6 +249,7 @@ def test_query_service_audits_failed_command(tmp_path: Path, monkeypatch: pytest
         repo,
         tmp_path / "run" / "krepo-queries",
         "parse_packet",
+        "src/packet.c",
     )
 
     result = service.query(KRepoSymbolQuery(symbol="packet_t", kind="typedef"))
@@ -248,7 +258,14 @@ def test_query_service_audits_failed_command(tmp_path: Path, monkeypatch: pytest
     audit = json.loads(service.audit_path.read_text(encoding="utf-8").strip())
     assert audit["command_executed"] is True
     assert audit["argv"][:4] == [sys.executable, str(cli.resolve()), "symbol", "packet_t"]
-    assert audit["argv"][4:8] == ["--repo", str(repo.resolve()), "--function", "parse_packet"]
+    assert audit["argv"][4:10] == [
+        "--repo",
+        str(repo.resolve()),
+        "--function",
+        "parse_packet",
+        "--file",
+        "src/packet.c",
+    ]
     assert "--max-candidates" not in audit["argv"]
     assert "--max-snippet-lines" not in audit["argv"]
     assert audit["command"] == shlex.join(audit["argv"])

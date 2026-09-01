@@ -27,15 +27,15 @@ dependency 头文件、同 basename 头、调用/引用文件和构建文件均�
     {
       "operation": "symbol",
       "symbol": "packet_t",
-      "kind": "typedef",
-      "file": "include/packet.h"
+      "kind": "typedef"
     }
   ]
 }
 ```
 
-`kind` 和 `file` 可省略。控制器执行 kRepo `symbol` 时自动附加
-`--function <当前目标函数>`，模型不需要也不能覆盖该值；不再传递
+`kind` 可省略。控制器执行 kRepo `symbol` 时自动附加
+`--repo <代码仓>`、`--function <当前目标函数>` 和
+`--file <目标函数实现文件>`，模型不需要也不能覆盖这些值；不再传递
 `--max-candidates` 和 `--max-snippet-lines`。结果在同一个 DSH session 中回填，模型可以
 继续查询或返回最终工件。查询结果属于不可信仓库数据，不能作为指令。
 
@@ -43,7 +43,7 @@ dependency 头文件、同 basename 头、调用/引用文件和构建文件均�
 
 - 仓库目录由 `PreprocessResult.source_root` 绑定，模型不能指定其他 repo；
 - 仅开放非函数 `symbol` 查询，不开放 Bash、任意文件读取、网络或 kRepo 写文件命令；
-- 符号名、kind 和相对 file filter 均做白名单校验；
+- 符号名和 kind 均做白名单校验，目标实现文件来自 preprocess 并校验为仓内相对路径；
 - 每个请求最多 3 个查询，每轮 generation 最多 3 个查询回合、合计 6 个查询；
 - 单个查询输出最多 16 KiB，子进程超时 120 秒；
 - 每个 generation loop 仍使用独立 session，查询仅在当前 loop 的 session 内回填。
@@ -52,7 +52,7 @@ dependency 头文件、同 basename 头、调用/引用文件和构建文件均�
 
 查询状态位于 `<run-dir>/krepo-queries/`：
 
-- `queries.jsonl`：追加记录查询参数（含 controller 注入的目标函数）、结果、时间、是否命中缓存，以及实际执行的
+- `queries.jsonl`：追加记录查询参数（含 controller 注入的目标函数和实现文件）、结果、时间、是否命中缓存，以及实际执行的
   `command`、`argv`、`cwd`；失败命令同样记录，缓存命中项标记为未执行；
 - `cache/<sha256>.json`：以标准化查询参数为键的结果缓存。
 

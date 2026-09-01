@@ -351,11 +351,22 @@ class DeepSeekHarnessDriver:
                 for query in queries
             ]
         if self._krepo_service is None:
+            target_file = _target_function_file(preprocess)
+            if target_file is None:
+                return [
+                    {
+                        "query": _query_payload(query),
+                        "ok": False,
+                        "error": "target function file is missing from preprocess context",
+                    }
+                    for query in queries
+                ]
             self._krepo_service = KRepoQueryService(
                 self.workspace_root,
                 preprocess.source_root,
                 self._run_dir / "krepo-queries",
                 preprocess.target_function,
+                target_file,
             )
         results: list[dict[str, object]] = []
         for index, query in enumerate(queries, start=1):
@@ -670,22 +681,26 @@ def _extract_krepo_queries(text: str) -> list[KRepoSymbolQuery] | None:
         raise ValueError(f"at most {MAX_KREPO_QUERIES_PER_ROUND} queries are allowed per round")
     queries: list[KRepoSymbolQuery] = []
     for raw in raw_queries:
-        if not isinstance(raw, dict) or set(raw) - {"operation", "symbol", "kind", "file"}:
-            raise ValueError("each query must contain only operation, symbol, kind, and file")
+        if not isinstance(raw, dict) or set(raw) - {"operation", "symbol", "kind"}:
+            raise ValueError("each query must contain only operation, symbol, and kind")
         if raw.get("operation") != "symbol" or not isinstance(raw.get("symbol"), str):
             raise ValueError("each query requires operation='symbol' and a string symbol")
         kind = raw.get("kind")
-        file_filter = raw.get("file")
         if kind is not None and not isinstance(kind, str):
             raise ValueError("query kind must be a string or null")
-        if file_filter is not None and not isinstance(file_filter, str):
-            raise ValueError("query file must be a string or null")
-        queries.append(KRepoSymbolQuery(symbol=raw["symbol"], kind=kind, file=file_filter))
+        queries.append(KRepoSymbolQuery(symbol=raw["symbol"], kind=kind))
     return queries
 
 
 def _query_payload(query: KRepoSymbolQuery) -> dict[str, str | None]:
-    return {"operation": "symbol", "symbol": query.symbol, "kind": query.kind, "file": query.file}
+    return {"operation": "symbol", "symbol": query.symbol, "kind": query.kind}
+
+
+def _target_function_file(preprocess: PreprocessResult) -> str | None:
+    return next(
+        (context.path for context in preprocess.contexts if context.kind == "target_function"),
+        None,
+    )
 
 
 def estimate_tokens(text: str) -> int:
@@ -730,12 +745,12 @@ trees, and parameter constraints. If a non-function dependency (macro, typedef, 
 struct, or union) is required, request the controller's read-only kRepo lookup by responding with
 EXACTLY ONE object of this shape instead of GeneratedArtifactSet:
 {{"type":"krepo_query","reason":"why it is needed","queries":[
-  {{"operation":"symbol","symbol":"NAME","kind":"struct","file":"optional/repo/path.h"}}
+  {{"operation":"symbol","symbol":"NAME","kind":"struct"}}
 ]}}
-Use at most {MAX_KREPO_QUERIES_PER_ROUND} queries per request. Omit kind/file when unknown. The
-controller will return bounded query results in the same session; then either request more context
-or return the final GeneratedArtifactSet. Do not guess dependency definitions when a lookup can
-resolve them.
+Use at most {MAX_KREPO_QUERIES_PER_ROUND} queries per request. Omit kind when unknown. The
+controller always binds --repo, --function, and --file to the preprocessed target implementation,
+then returns bounded query results in the same session. Either request more context or return the
+final GeneratedArtifactSet. Do not guess dependency definitions when a lookup can resolve them.
 
 This is generation loop {expected_loop}.
 
