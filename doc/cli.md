@@ -263,7 +263,8 @@ openrouter/xai）+ 手写 OpenAI 兼容网关。自定义网关端点/模型名�
   union 时，可返回临时 `krepo_query` 请求。控制器仅执行 kRepo `symbol`，仓库边界
   由 preprocess 绑定；每次最多 3 个、每轮最多 6 个、最多 3 个回合，单结果最多
   16 KiB。相同请求跨 generation loop/resume 命中持久化缓存，查询与结果记录在
-  `<run-dir>/krepo-queries/queries.jsonl`，缓存位于其 `cache/`；`--debug` 显示命令。
+  `<run-dir>/krepo-queries/queries.jsonl`，其中包含实际 `command`、`argv` 和 `cwd`，
+  包括执行失败的命令；缓存位于其 `cache/`，`--debug` 同时显示命令。
 - **kRepo 前置条件**：初始化 `tools/kRepo` 子模块，并用 VS Code C/C++ 扩展为
   被测仓生成 `.vscode/BROWSE.VC.DB`。goaloop 只执行只读 `report`/`symbol`，不调用
   `source`/`outgoingFuncs` 等写文件命令。preprocess 执行前 Terminal 会输出完整、
@@ -302,7 +303,7 @@ goaloop run --repo repos/<project> --source src/target.c --function <symbol> --b
    必须可按 C++ 编译，libFuzzer 入口使用 `extern "C"`，C 目标声明同样保持 C linkage。
 3. 控制器以 `<build-dir>` 为工作目录执行 `sh <build-dir>/build.sh`。
 4. 控制器解析构建输出中的 `GOALOOP_FUZZER=<path>`、`executable:`、`binary:` 或
-   编译命令 `-o <path>`，只接受实际存在且可执行的文件。
+   编译命令 `-o <path>`，只接受实际存在且可执行的文件。框架不扫描文件系统猜测产物。
 5. 使用识别出的可执行文件直接 fuzz 和采集覆盖率。
 
 要点：

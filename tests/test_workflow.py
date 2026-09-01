@@ -573,12 +573,15 @@ class TestBuildDirMode:
         assert "execution:build_binary" in events
         execution = json.loads((run_dir / "executions" / "loop-01" / "execution.json").read_text())
         assert execution["coverage"]["target_function_hit"] is True
-        assert execution["fuzzer_binary"] == str(run_dir / "build-output" / "cmake_fuzzer")
+        expected_binary = build_dir / "cmake-build" / "bin" / "fuzz_harness.out"
+        assert execution["fuzzer_binary"] == str(expected_binary)
         installed_harness = build_dir / "src" / "harness.cpp"
         assert "LLVMFuzzerTestOneInput" in installed_harness.read_text(encoding="utf-8")
         assert "stale harness" not in installed_harness.read_text(encoding="utf-8")
-        assert (run_dir / "build-output" / "cmake_fuzzer").is_file()
-        assert "GOALOOP_FUZZER=" in (run_dir / "logs" / "build-loop-01.stdout.log").read_text()
+        assert expected_binary.is_file()
+        build_log = (run_dir / "logs" / "build-loop-01.stdout.log").read_text()
+        assert "Built target fuzz_harness" in build_log
+        assert f"GOALOOP_FUZZER={expected_binary}" in build_log
 
     def test_build_dir_requires_build_script(self, workspace_root: Path) -> None:
         bad_dir = workspace_root / "repos" / "safe" / "no-build-script"

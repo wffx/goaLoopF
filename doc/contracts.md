@@ -85,7 +85,7 @@ session 回填结果；每轮最多 3 个查询回合、合计 6 个查询。
 - `BuildPlan` 的 `cflags`/`ldflags` 禁止 shell 元字符（`\x00`、`\n`、`\r`、`;`、`&&`、`\|\|`、`` ` ``、`$(`、`>`、`<`）
 - 标准模式的 `GeneratedArtifactSet` 必须包含 harness + `Makefile`、`build.sh`、`endpoint.json`、`README.fuzz.md`
 - build-dir 模式必须且只能包含 `harness.c`；控制器覆盖复制到 `<build-dir>/src/harness.cpp` 后执行用户预置 `build.sh`
-- `build.sh` 输出识别优先使用 `GOALOOP_FUZZER=<path>`，只接受存在且可执行的产物；外部输出目录必须显式声明
+- `build.sh` 输出识别优先使用 `GOALOOP_FUZZER=<path>`，其次解析标签和 `-o`；框架不扫描文件系统猜测产物，外部输出目录必须显式声明
 - `GenerationDecision`：`completes_goal` 仅当 `ACCEPTED`；`NEEDS_REGENERATION` 必须带 `feedback`
 - `PreprocessResult`：`ready` 与 `terminal_status` 互斥
 - `ExecutionLease.authorize()`：同时支持精确名称匹配和 `shutil.which` 解析 + 目录级授权

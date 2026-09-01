@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -70,8 +71,16 @@ class KRepoQueryService:
         cache_path = self.cache_dir / f"{cache_key}.json"
         cached = _read_cached_query(cache_path)
         if cached is not None:
-            self._append_audit(normalized, cached, cache_hit=True)
+            self._append_audit(normalized, cached, cache_hit=True, command=None)
             return cached
+        executed_command: list[str] | None = None
+
+        def capture_command(command: list[str]) -> None:
+            nonlocal executed_command
+            executed_command = command.copy()
+            if on_command is not None:
+                on_command(command.copy())
+
         try:
             output = query_krepo_symbol(
                 self.workspace_root,
@@ -79,14 +88,14 @@ class KRepoQueryService:
                 normalized.symbol,
                 kind=normalized.kind,
                 file_filter=normalized.file,
-                on_command=on_command,
+                on_command=capture_command,
             )
             result: dict[str, object] = {"ok": True, "output": output}
         except KRepoError as exc:
             result = {"ok": False, "error": str(exc)}
         if result.get("ok") is True:
             self._write_cache(cache_path, result)
-        self._append_audit(normalized, result, cache_hit=False)
+        self._append_audit(normalized, result, cache_hit=False, command=executed_command)
         return result
 
     def _write_cache(self, path: Path, result: dict[str, object]) -> None:
@@ -107,12 +116,17 @@ class KRepoQueryService:
         result: dict[str, object],
         *,
         cache_hit: bool,
+        command: list[str] | None,
     ) -> None:
         self.audit_path.parent.mkdir(parents=True, exist_ok=True)
         record = {
             "timestamp": datetime.now(UTC).isoformat(),
             "query": {"symbol": query.symbol, "kind": query.kind, "file": query.file},
             "cache_hit": cache_hit,
+            "command_executed": command is not None,
+            "command": shlex.join(command) if command is not None else None,
+            "argv": command,
+            "cwd": str(self.repo_root),
             "result": result,
         }
         with self.audit_path.open("a", encoding="utf-8", newline="\n") as handle:

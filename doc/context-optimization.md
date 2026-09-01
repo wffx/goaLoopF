@@ -50,7 +50,8 @@ dependency 头文件、同 basename 头、调用/引用文件和构建文件均�
 
 查询状态位于 `<run-dir>/krepo-queries/`：
 
-- `queries.jsonl`：追加记录查询参数、结果、时间和是否命中缓存；
+- `queries.jsonl`：追加记录查询参数、结果、时间、是否命中缓存，以及实际执行的
+  `command`、`argv`、`cwd`；失败命令同样记录，缓存命中项标记为未执行；
 - `cache/<sha256>.json`：以标准化查询参数为键的结果缓存。
 
 相同查询在后续 generation loop 或 `resume` 后直接复用缓存，避免重复运行 kRepo。

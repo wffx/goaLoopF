@@ -101,6 +101,7 @@ src/goaloop/
 dependency 和构建文件内容不进入 `preprocess.json`；模型在 generation 中通过受控
 `krepo_query` 协议查询非函数符号。查询限制为每轮最多 6 次、每次请求最多 3 个，
 结果按 16 KiB 截断、缓存并审计到 run 目录的 `krepo-queries/`。`--debug` 会显示查询命令。
+`krepo-queries/queries.jsonl` 同时保存实际执行的 `command`、`argv` 和 `cwd`，失败查询也会记录。
 执行 preprocess kRepo 前，Terminal 会输出完整的 `main.py report ... --format json` 命令。
 
 ## 文档

@@ -190,6 +190,13 @@ class TestBuildOutputDiscovery:
     def test_generic_external_token_is_not_treated_as_output(self, tmp_path: Path) -> None:
         assert find_build_output_binary("checking /bin/sh\n", tmp_path) is None
 
+    def test_does_not_scan_filesystem_for_conventional_binary_names(self, tmp_path: Path) -> None:
+        binary = tmp_path / "cmake-build" / "bin" / "fuzz_harness.out"
+        binary.parent.mkdir(parents=True)
+        binary.write_text("binary", encoding="utf-8")
+        binary.chmod(0o755)
+
+        assert find_build_output_binary("[100%] Built target fuzz_harness\n", tmp_path) is None
 
 class TestFuzzAssembly:
     def test_argv(self, tmp_path: Path) -> None:

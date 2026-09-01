@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shlex
 import sys
 from pathlib import Path
 
@@ -202,3 +203,30 @@ def test_query_service_caches_and_audits_identical_queries(
     assert len(commands) == 1
     audit = [json.loads(line) for line in service.audit_path.read_text(encoding="utf-8").splitlines()]
     assert [entry["cache_hit"] for entry in audit] == [False, True]
+    assert audit[0]["command_executed"] is True
+    assert audit[0]["argv"] == commands[0]
+    assert audit[0]["command"] == shlex.join(commands[0])
+    assert audit[0]["cwd"] == str(repo.resolve())
+    assert audit[1]["command_executed"] is False
+    assert audit[1]["command"] is None
+    assert audit[1]["argv"] is None
+
+
+def test_query_service_audits_failed_command(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    workspace = tmp_path / "workspace"
+    repo = workspace / "repo"
+    repo.mkdir(parents=True)
+    cli = tmp_path / "failing-krepo.py"
+    _write_cli(cli, {"error": "usage mismatch"}, exit_code=2)
+    monkeypatch.setenv("GOALOOP_KREPO", str(cli))
+    service = KRepoQueryService(workspace, repo, tmp_path / "run" / "krepo-queries")
+
+    result = service.query(KRepoSymbolQuery(symbol="packet_t", kind="typedef"))
+
+    assert result["ok"] is False
+    audit = json.loads(service.audit_path.read_text(encoding="utf-8").strip())
+    assert audit["command_executed"] is True
+    assert audit["argv"][:4] == [sys.executable, str(cli.resolve()), "symbol", "packet_t"]
+    assert audit["command"] == shlex.join(audit["argv"])
+    assert audit["cwd"] == str(repo.resolve())
+    assert "exit code 2" in audit["result"]["error"]
