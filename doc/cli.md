@@ -116,8 +116,8 @@ suite.json 格式：
 run 目录同时生成：
 
 - `optimization-suggestions.json`：机器可读的信号、证据、优先级、建议与预期收益；
-- `optimization-suggestions.md`：完整的人类可读分析；
-- `report.md`：追加精简的 `Optimization Suggestions` 章节。
+- `optimization-suggestions.md`：完整的人类可读分析，与任务验证报告独立存放；
+- `report.md`：只保留任务执行、验证和崩溃分析结果，不包含工程优化建议。
 
 当前规则关注输入范围、环境阻断、模型格式失败、首轮编译、重生成轮次、模型调用失败、
 平均调用超过 60 秒、累计估算输入超过 100K token/单次超过 50K token，以及未闭合的

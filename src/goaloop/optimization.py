@@ -357,21 +357,6 @@ def render_optimization_markdown(analysis: OptimizationAnalysis) -> str:
     return "\n".join(lines)
 
 
-def render_report_section(analysis: OptimizationAnalysis) -> str:
-    lines = [
-        "## Optimization Suggestions",
-        "",
-        f"{analysis.summary} 完整分析见 `{OPTIMIZATION_REPORT_FILENAME}`。",
-        "",
-    ]
-    for suggestion in analysis.suggestions:
-        lines.append(
-            f"- **[{suggestion.priority.value.upper()}] {suggestion.title}**：{suggestion.recommendation}"
-        )
-    lines.append("")
-    return "\n".join(lines)
-
-
 def _method_count(trace_summary: dict[str, Any], method: str) -> int:
     methods = trace_summary.get("methods")
     if not isinstance(methods, dict):

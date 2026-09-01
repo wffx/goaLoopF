@@ -13,7 +13,7 @@ from goaloop.models import (
     RunState,
     TerminalStatus,
 )
-from goaloop.optimization import analyze_run_optimization, render_optimization_markdown, render_report_section
+from goaloop.optimization import analyze_run_optimization, render_optimization_markdown
 
 
 def _state(status: TerminalStatus, *, loops: int = 1, max_loops: int = 3) -> RunState:
@@ -114,7 +114,7 @@ def test_failed_generation_prioritizes_output_build_and_rework() -> None:
     assert analysis.signals["model_call_failures"] == 1
 
 
-def test_markdown_and_report_section_include_actionable_content() -> None:
+def test_markdown_includes_actionable_content() -> None:
     analysis = analyze_run_optimization(
         state=_state(TerminalStatus.BLOCKED, loops=0),
         metrics=_metrics(
@@ -130,11 +130,8 @@ def test_markdown_and_report_section_include_actionable_content() -> None:
     )
 
     markdown = render_optimization_markdown(analysis)
-    section = render_report_section(analysis)
     assert "恢复运行环境或外部依赖" in markdown
     assert "goaloop doctor" in markdown
-    assert "## Optimization Suggestions" in section
-    assert "optimization-suggestions.md" in section
 
 
 def test_dominant_phase_is_reported_from_duration_metrics() -> None:

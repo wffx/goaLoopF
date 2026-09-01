@@ -124,7 +124,8 @@ class TestSafeFixture:
         assert (run_dir / "optimization-suggestions.md").is_file()
         optimization = json.loads((run_dir / "optimization-suggestions.json").read_text())
         assert optimization["suggestions"][0]["id"] == "validate-success-baseline"
-        assert "## Optimization Suggestions" in (run_dir / "report.md").read_text(encoding="utf-8")
+        assert "## Optimization Suggestions" not in (run_dir / "report.md").read_text(encoding="utf-8")
+        assert "## Suggestions" in (run_dir / "optimization-suggestions.md").read_text(encoding="utf-8")
         execution = json.loads((run_dir / "executions" / "loop-01" / "execution.json").read_text())
         assert execution["disposition"] == "accepted"
         coverage = execution["coverage"]

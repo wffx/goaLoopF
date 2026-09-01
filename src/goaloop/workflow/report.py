@@ -25,7 +25,6 @@ from ..optimization import (
     OPTIMIZATION_REPORT_FILENAME,
     analyze_run_optimization,
     render_optimization_markdown,
-    render_report_section,
 )
 from ..report import (
     build_research_metrics,
@@ -192,8 +191,6 @@ class ReportMixin:
             self.store.run_dir / OPTIMIZATION_REPORT_FILENAME,
             render_optimization_markdown(optimization),
         )
-        report_content = report_path.read_text(encoding="utf-8").rstrip() + "\n\n" + render_report_section(optimization)
-        self.store.write_text(report_path, report_content)
         self.state.optimization_analysis_path = OPTIMIZATION_ANALYSIS_FILENAME
         top = optimization.suggestions[0] if optimization.suggestions else None
         self._event(

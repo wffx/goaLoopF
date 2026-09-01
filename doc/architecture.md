@@ -56,7 +56,7 @@
 
 进入终态后，`ReportMixin` 先写入 `research-metrics.json`，再由确定性规则分析器结合
 终态原因、执行结果和 DSH trace 摘要生成 `optimization-suggestions.json` 与
-`optimization-suggestions.md`，同时把简版建议追加到 `report.md`。分析过程不调用模型，
+`optimization-suggestions.md`。优化建议与 `report.md` 完全分离；分析过程不调用模型，
 因此不会增加 token 消耗，也不会因模型不可用阻塞报告阶段。`run`、`resume` 和
 `evaluate` 默认通过 `optimization:completed` 事件输出建议摘要。
 
