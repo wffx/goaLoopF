@@ -124,6 +124,8 @@ class TestSafeFixture:
         assert (run_dir / "optimization-suggestions.md").is_file()
         optimization = json.loads((run_dir / "optimization-suggestions.json").read_text())
         assert optimization["suggestions"][0]["id"] == "validate-success-baseline"
+        assert optimization["generator"] == "deterministic_fallback"
+        assert "driver does not provide" in optimization["fallback_reason"]
         assert "## Optimization Suggestions" not in (run_dir / "report.md").read_text(encoding="utf-8")
         assert "## Suggestions" in (run_dir / "optimization-suggestions.md").read_text(encoding="utf-8")
         execution = json.loads((run_dir / "executions" / "loop-01" / "execution.json").read_text())
@@ -140,6 +142,7 @@ class TestSafeFixture:
         assert "run:terminal" in events
         assert "harness_verified" in events
         assert "optimization:completed" in events
+        assert "optimization:started" in events
 
     def test_resume_terminal_run_refreshes_report(self, workspace_root: Path) -> None:
         request = _request(workspace_root, source="repos/safe", function="safe_parse")

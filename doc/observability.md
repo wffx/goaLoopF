@@ -42,17 +42,18 @@ request header/context、完整 prompt 等噪声；reasoning/text 流式 chunk �
 
 ## 自动优化分析
 
-每个任务进入终态后，goaloop 默认将 `research-metrics.json`、终态原因、最后一次执行
-证据和 `dsh-trace-summary.json` 交给确定性规则分析器，生成：
+每个任务进入终态后，goaloop 先用确定性规则整理基础信号，再通过 DSH Python SDK 的独立
+`<run-id>-optimization` session 读取有界的原始 session trace、workflow events、历轮
+execution、kRepo 查询审计和指标，生成：
 
-- `optimization-suggestions.json`：结构化信号和最多 6 条有序建议；
+- `optimization-suggestions.json`：结构化信号、生成方式和最多 3 条有序建议；
 - `optimization-suggestions.md`：包含证据、建议和预期收益的完整报告；
-- `report.md` 中的精简建议章节。
+- `report.md`：保持任务验证报告，不混入工程优化建议。
 
-分析器不调用大模型，不增加 token 消耗。规则会识别输入/环境阻断、格式重试、首轮编译
-失败、多轮返工、模型调用失败、高延迟、高输入 token 和工具调用生命周期不完整等信号。
-Terminal 默认显示建议摘要，`goaloop status` 可再次查看建议；`evaluate-results.json`
-同时保存每个 run 的建议并按目标函数汇总高频项。
+模型只能根据本次运行证据提出建议，不能修改代码或自动实施；输出使用严格 JSON，并允许
+一次格式修复。模型不可用或持续输出无效时，确定性规则结果作为 fallback，原因写入
+`fallback_reason`，报告阶段继续完成。该分析调用及原始 notification 继续追加到 DSH trace。
+Terminal 默认显示建议摘要；`evaluate-results.json` 同时保存每个 run 的建议并按目标函数汇总高频项。
 
 ## 优化使用方式
 

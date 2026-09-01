@@ -109,8 +109,7 @@ def test_failed_generation_prioritizes_output_build_and_rework() -> None:
         "stabilize-model-output",
         "stabilize-model-provider",
     ]
-    assert "reduce-generation-rework" in ids
-    assert len(ids) <= 6
+    assert len(ids) <= 3
     assert analysis.signals["model_call_failures"] == 1
 
 

@@ -86,7 +86,7 @@ src/goaloop/
 ├── coverage.py        # profraw 合并、llvm-cov 导出、覆盖归因
 ├── driver.py          # DeepSeek Harness SDK 适配器 + 测试驱动
 ├── crash.py           # 栈归属、输入最小化、独立复现
-├── optimization.py    # 终态指标/trace 的确定性分析与优化建议
+├── optimization.py    # 终态指标/trace 基础分析与模型建议 fallback
 ├── report.py / redaction.py  # 报告、研究指标、日志脱敏
 ├── workflow/          # 四阶段状态机（controller/generation/report）
 └── cli.py             # run/resume/status/report/evaluate/doctor

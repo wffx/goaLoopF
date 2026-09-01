@@ -17,7 +17,7 @@ from .models import (
 
 OPTIMIZATION_ANALYSIS_FILENAME = "optimization-suggestions.json"
 OPTIMIZATION_REPORT_FILENAME = "optimization-suggestions.md"
-MAX_SUGGESTIONS = 6
+MAX_SUGGESTIONS = 3
 HIGH_INPUT_TOKENS_PER_CALL = 50_000
 HIGH_TOTAL_INPUT_TOKENS = 100_000
 SLOW_MODEL_CALL_SECONDS = 60.0
@@ -335,6 +335,8 @@ def render_optimization_markdown(analysis: OptimizationAnalysis) -> str:
         f"- **generated**: {analysis.generated_at.isoformat()}",
         f"- **source metrics**: `{analysis.source_metrics_path}`",
         f"- **trace summary**: `{analysis.trace_summary_path or 'unavailable'}`",
+        f"- **generator**: `{analysis.generator}`",
+        f"- **fallback reason**: {analysis.fallback_reason or '—'}",
         f"- **summary**: {analysis.summary}",
         "",
         "## Signals",

@@ -749,9 +749,12 @@ def _progress_line(kind: str, payload: dict[str, object]) -> str | None:
             f"reproductions={payload.get('reproductions')}"
         ),
         "report:write_started": f"step=report_write_started status={payload.get('status')}",
+        "optimization:started": f"step=optimization_started generator={payload.get('generator')}",
+        "optimization:fallback": f"step=optimization_fallback reason={payload.get('reason')}",
         "optimization:completed": (
             f"step=optimization_completed suggestions={payload.get('suggestions')} "
-            f"priority={payload.get('highest_priority')} top={payload.get('top_suggestion')}"
+            f"priority={payload.get('highest_priority')} generator={payload.get('generator')} "
+            f"top={payload.get('top_suggestion')}"
         ),
         "report:written": f"step=report_written status={payload.get('status')}",
         "run:terminal": f"step=terminal status={payload.get('status')} reason={payload.get('reason')}",

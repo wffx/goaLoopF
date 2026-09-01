@@ -73,4 +73,5 @@ goaloop run --repo repos/cJSON-1.7.17 --source cJSON.c --function cJSON_Parse --
 - **严格 JSON 防陈旧**：模型响应必须携带 `schema_version`、`run_id`、`phase`、`generation_loop`，控制器验证一致后才采纳；字段不匹配立即拒绝，防止旧轮次/跨 run 响应被错误应用。
 - **单次格式修复重试**：JSON 解析或 schema 校验失败仅允许一次携带精确错误信息的重试；再次失败终止本轮生成。
 - **默认终态优化分析**：每个终态 run 都根据 `research-metrics.json`、DSH trace 摘要、
-  执行结果和终态原因生成有证据的优化建议；分析器不再调用模型，结果可重复、可审计。
+  执行结果和终态原因先形成基础信号，再由独立 DSH session 提炼少量有证据的优化建议；
+  模型不可用或输出无效时退回确定性规则结果。

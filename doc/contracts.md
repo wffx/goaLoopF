@@ -57,8 +57,8 @@ session 回填结果；`--repo`、`--function`、`--file` 均由 preprocess 上�
 |---|---|---|
 | `ValidationResult` | 验证结论 | 携带 `status`、`execution`、`crash_analysis`、`report_path` |
 | `ResearchMetrics` | 研究指标导出 | `token_source` 限 `sdk`/`unavailable`；包含阶段耗时、generation loops、格式重试，以及 DSH trace 路径、事件数、模型调用耗时/规模和工具调用计数 |
-| `OptimizationSuggestion` | 单条优化建议 | 固定 `priority`/`category`，包含证据、可执行建议和预期收益；每个 run 最多 6 条 |
-| `OptimizationAnalysis` | 自动优化分析产物 | 绑定 run 终态、指标/trace 路径、分析信号和有序建议列表；分析不调用模型 |
+| `OptimizationSuggestion` | 单条优化建议 | 固定 `priority`/`category`，必须包含本次运行证据、可审计建议和预期收益 |
+| `OptimizationAnalysis` | 自动优化分析产物 | 绑定 run 终态、指标/trace 路径、基础信号、最多 3 条建议及 `generator`/fallback 原因 |
 
 ## 状态与持久化
 

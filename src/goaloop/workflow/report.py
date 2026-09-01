@@ -179,12 +179,34 @@ class ReportMixin:
         self.state.validation_result_path = "validation.json"
         metrics = self._write_metrics(report_path)
         trace_summary = self.driver.trace_summary()
-        optimization = analyze_run_optimization(
+        basic_optimization = analyze_run_optimization(
             state=self.state,
             metrics=metrics,
             reason=reason,
             execution=self.last_execution,
             trace_summary=trace_summary,
+        )
+        self._event("optimization:started", {"generator": "dsh_model"})
+        try:
+            model_optimization = self.driver.analyze_optimization(
+                state=self.state,
+                metrics=metrics,
+                reason=reason,
+                execution=self.last_execution,
+                basic_analysis=basic_optimization,
+            )
+        except Exception as exc:
+            model_optimization = None
+            fallback_reason = f"{type(exc).__name__}: {exc}"[:1000]
+        else:
+            fallback_reason = "driver does not provide model-based optimization analysis"
+        if model_optimization is None:
+            self._event("optimization:fallback", {"reason": fallback_reason})
+        optimization = model_optimization or basic_optimization.model_copy(
+            update={
+                "generator": "deterministic_fallback",
+                "fallback_reason": fallback_reason,
+            }
         )
         self.store.write_json(self.store.run_dir / OPTIMIZATION_ANALYSIS_FILENAME, optimization)
         self.store.write_text(
@@ -199,6 +221,8 @@ class ReportMixin:
                 "suggestions": len(optimization.suggestions),
                 "highest_priority": top.priority.value if top is not None else None,
                 "top_suggestion": top.title if top is not None else None,
+                "generator": optimization.generator,
+                "fallback_reason": optimization.fallback_reason,
                 "analysis": OPTIMIZATION_ANALYSIS_FILENAME,
                 "report": OPTIMIZATION_REPORT_FILENAME,
             },

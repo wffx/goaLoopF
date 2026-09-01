@@ -17,6 +17,7 @@ from goaloop.models import (
     GeneratedFile,
     GenerationDecision,
     Language,
+    OptimizationModelResponse,
     PreprocessResult,
     TerminalStatus,
 )
@@ -46,6 +47,42 @@ class TestFuzzRunRequest:
             FuzzRunRequest(source="repos/x", function="bad;symbol")
         with pytest.raises(ValidationError):
             FuzzRunRequest(source="repos/x", function="")
+
+
+class TestOptimizationModelResponse:
+    def test_rejects_more_than_three_suggestions(self) -> None:
+        suggestion = {
+            "id": "specific-improvement",
+            "priority": "medium",
+            "category": "generation",
+            "title": "Specific improvement",
+            "evidence": ["one concrete run fact"],
+            "recommendation": "Apply one reviewed configuration change.",
+            "expected_impact": "Reduce one measured source of rework.",
+        }
+        with pytest.raises(ValidationError):
+            OptimizationModelResponse.model_validate(
+                {"summary": "summary", "suggestions": [suggestion] * 4}
+            )
+
+    def test_requires_evidence_for_each_suggestion(self) -> None:
+        with pytest.raises(ValidationError):
+            OptimizationModelResponse.model_validate(
+                {
+                    "summary": "summary",
+                    "suggestions": [
+                        {
+                            "id": "unsupported-improvement",
+                            "priority": "low",
+                            "category": "generation",
+                            "title": "Unsupported improvement",
+                            "evidence": [],
+                            "recommendation": "Change something.",
+                            "expected_impact": "Unknown.",
+                        }
+                    ],
+                }
+            )
 
 
 class TestBuildPlanSafety:

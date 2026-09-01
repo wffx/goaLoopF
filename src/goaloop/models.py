@@ -571,9 +571,17 @@ class OptimizationSuggestion(Contract):
     priority: OptimizationPriority
     category: OptimizationCategory
     title: Annotated[str, Field(min_length=1, max_length=160)]
-    evidence: list[Annotated[str, Field(min_length=1, max_length=1000)]] = Field(default_factory=list)
+    evidence: Annotated[
+        list[Annotated[str, Field(min_length=1, max_length=1000)]],
+        Field(min_length=1, max_length=5),
+    ]
     recommendation: Annotated[str, Field(min_length=1, max_length=2000)]
     expected_impact: Annotated[str, Field(min_length=1, max_length=1000)]
+
+
+class OptimizationModelResponse(Contract):
+    summary: Annotated[str, Field(min_length=1, max_length=1000)]
+    suggestions: Annotated[list[OptimizationSuggestion], Field(max_length=3)] = Field(default_factory=list)
 
 
 class OptimizationAnalysis(Contract):
@@ -586,6 +594,8 @@ class OptimizationAnalysis(Contract):
     summary: Annotated[str, Field(min_length=1, max_length=1000)]
     signals: dict[str, int | float | str | bool | None] = Field(default_factory=dict)
     suggestions: list[OptimizationSuggestion] = Field(default_factory=list)
+    generator: Literal["dsh_model", "deterministic_fallback"] = "deterministic_fallback"
+    fallback_reason: Annotated[str, Field(max_length=1000)] | None = None
 
 
 class RunState(Contract):

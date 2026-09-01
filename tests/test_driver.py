@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 
 import pytest
 from pydantic import ValidationError
@@ -15,16 +16,23 @@ from goaloop.driver import (
     StaleResponseError,
     build_format_retry_prompt,
     build_generation_prompt,
+    build_optimization_prompt,
     estimate_tokens,
     extract_json,
 )
 from goaloop.models import (
     SCHEMA_VERSION,
     CapabilityReport,
+    FuzzRunRequest,
     GenerationFeedback,
     GenerationGoal,
+    OptimizationAnalysis,
+    OptimizationSuggestion,
     PreprocessResult,
+    ResearchMetrics,
+    RunState,
     SourceContext,
+    TerminalStatus,
 )
 
 from .helpers import make_artifact_payload
@@ -51,6 +59,46 @@ def _goal(run_id: str = "run-d", loop: int = 0) -> GenerationGoal:
         max_generation_loops=3,
         current_loop=loop,
     )
+
+
+def _optimization_inputs() -> tuple[RunState, ResearchMetrics, OptimizationAnalysis]:
+    state = RunState(
+        run_id="run-live",
+        project_name="safe",
+        request=FuzzRunRequest(repo="repos/safe", source="src/safe.c", function="safe_parse"),
+        generation_loop=2,
+        terminal_status=TerminalStatus.HARNESS_VERIFIED,
+        goal=_goal("run-live", loop=2),
+    )
+    now = datetime.now(UTC)
+    metrics = ResearchMetrics(
+        run_id="run-live",
+        provider="test",
+        model="test-model",
+        prompt_version="v1",
+        endpoint_label="test",
+        started_at=now,
+        finished_at=now,
+        generation_loops_used=2,
+        final_status=TerminalStatus.HARNESS_VERIFIED,
+    )
+    basic = OptimizationAnalysis(
+        run_id="run-live",
+        final_status=TerminalStatus.HARNESS_VERIFIED,
+        summary="rule summary",
+        suggestions=[
+            OptimizationSuggestion(
+                id="reduce-generation-rework",
+                priority="medium",
+                category="generation",
+                title="reduce rework",
+                evidence=["two generation loops"],
+                recommendation="inspect repeated failures",
+                expected_impact="fewer loops",
+            )
+        ],
+    )
+    return state, metrics, basic
 
 
 class TestExtractJson:
@@ -287,6 +335,30 @@ class TestPrompt:
         assert estimate_tokens("x" * 3000) == 1000
         assert estimate_tokens("abcd") == 1
 
+    def test_optimization_prompt_includes_persisted_process_evidence(self, tmp_path) -> None:
+        state, metrics, basic = _optimization_inputs()
+        (tmp_path / "logs").mkdir()
+        (tmp_path / "logs" / "dsh-trace.jsonl").write_text(
+            '{"method":"goaloop.model_call.completed","payload":{"marker":"session-evidence"}}\n',
+            encoding="utf-8",
+        )
+        (tmp_path / "events.jsonl").write_text("workflow-evidence\n", encoding="utf-8")
+
+        prompt = build_optimization_prompt(
+            run_dir=tmp_path,
+            state=state,
+            metrics=metrics,
+            reason="verified",
+            execution=None,
+            trace_summary={},
+            basic_analysis=basic,
+        )
+
+        assert "session-evidence" in prompt
+        assert "workflow-evidence" in prompt
+        assert "at most 3 suggestions" in prompt
+        assert "Suggestions require user review" in prompt
+
 
 class FakeHarness:
     """Minimal stand-in for the real DeepSeekHarness SDK object."""
@@ -353,6 +425,41 @@ class TestDeepSeekHarnessDriver:
         artifacts = driver.generate_artifacts(goal=_goal(), preprocess=_preprocess(), feedback=None)
         assert artifacts.generation_loop == 1
         assert driver.format_retries == 0
+
+    def test_optimization_analysis_uses_distinct_dsh_session(self, tmp_path) -> None:
+        response = {
+            "summary": "The repeated generation loop points to avoidable build-context rework.",
+            "suggestions": [
+                {
+                    "id": "persist-build-context",
+                    "priority": "high",
+                    "category": "build",
+                    "title": "Persist stable build context",
+                    "evidence": ["generation_loops_used=2"],
+                    "recommendation": "Move repeated include and linker settings into the reviewed profile.",
+                    "expected_impact": "Reduce avoidable regeneration loops.",
+                }
+            ],
+        }
+        state, metrics, basic = _optimization_inputs()
+        driver = _real_driver()
+        driver.configure_run(run_dir=tmp_path / "run")
+        harness = FakeHarness([json.dumps(response)])
+        driver._harness = harness
+
+        analysis = driver.analyze_optimization(
+            state=state,
+            metrics=metrics,
+            reason="verified after two loops",
+            execution=None,
+            basic_analysis=basic,
+        )
+
+        assert analysis is not None
+        assert analysis.generator == "dsh_model"
+        assert [item.id for item in analysis.suggestions] == ["persist-build-context"]
+        assert harness.calls[0][1] == "run-live-optimization"
+        assert "generation_loops_used" in harness.calls[0][0]
 
     def test_generation_resolves_on_demand_krepo_query_in_same_session(self, tmp_path) -> None:
         query_request = {
