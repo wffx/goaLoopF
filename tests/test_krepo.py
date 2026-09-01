@@ -165,6 +165,7 @@ def test_queries_symbol_with_bounded_read_only_command(
         workspace,
         repo,
         "packet_t",
+        function="parse_packet",
         kind="typedef",
         file_filter="include/packet.h",
         on_command=commands.append,
@@ -172,6 +173,9 @@ def test_queries_symbol_with_bounded_read_only_command(
 
     assert "typedef int packet_t" in output
     assert commands[0][:4] == [sys.executable, str(cli.resolve()), "symbol", "packet_t"]
+    assert commands[0][4:8] == ["--repo", str(repo.resolve()), "--function", "parse_packet"]
+    assert "--max-candidates" not in commands[0]
+    assert "--max-snippet-lines" not in commands[0]
     assert commands[0][-4:] == ["--kind", "typedef", "--file", "include/packet.h"]
 
 
@@ -180,7 +184,13 @@ def test_symbol_query_rejects_unsafe_file_filter(
     tmp_path: Path, file_filter: str
 ) -> None:
     with pytest.raises(KRepoError, match="unsafe kRepo file filter"):
-        query_krepo_symbol(tmp_path, tmp_path, "packet_t", file_filter=file_filter)
+        query_krepo_symbol(
+            tmp_path,
+            tmp_path,
+            "packet_t",
+            function="parse_packet",
+            file_filter=file_filter,
+        )
 
 
 def test_query_service_caches_and_audits_identical_queries(
@@ -193,7 +203,12 @@ def test_query_service_caches_and_audits_identical_queries(
     _write_cli(cli, {"symbol": "LIMIT", "candidates": [{"snippet": "#define LIMIT 8"}]})
     monkeypatch.setenv("GOALOOP_KREPO", str(cli))
     commands: list[list[str]] = []
-    service = KRepoQueryService(workspace, repo, tmp_path / "run" / "krepo-queries")
+    service = KRepoQueryService(
+        workspace,
+        repo,
+        tmp_path / "run" / "krepo-queries",
+        "parse_config",
+    )
     query = KRepoSymbolQuery(symbol="LIMIT", kind="macro")
 
     first = service.query(query, on_command=commands.append)
@@ -207,6 +222,7 @@ def test_query_service_caches_and_audits_identical_queries(
     assert audit[0]["argv"] == commands[0]
     assert audit[0]["command"] == shlex.join(commands[0])
     assert audit[0]["cwd"] == str(repo.resolve())
+    assert audit[0]["query"]["function"] == "parse_config"
     assert audit[1]["command_executed"] is False
     assert audit[1]["command"] is None
     assert audit[1]["argv"] is None
@@ -219,7 +235,12 @@ def test_query_service_audits_failed_command(tmp_path: Path, monkeypatch: pytest
     cli = tmp_path / "failing-krepo.py"
     _write_cli(cli, {"error": "usage mismatch"}, exit_code=2)
     monkeypatch.setenv("GOALOOP_KREPO", str(cli))
-    service = KRepoQueryService(workspace, repo, tmp_path / "run" / "krepo-queries")
+    service = KRepoQueryService(
+        workspace,
+        repo,
+        tmp_path / "run" / "krepo-queries",
+        "parse_packet",
+    )
 
     result = service.query(KRepoSymbolQuery(symbol="packet_t", kind="typedef"))
 
@@ -227,6 +248,9 @@ def test_query_service_audits_failed_command(tmp_path: Path, monkeypatch: pytest
     audit = json.loads(service.audit_path.read_text(encoding="utf-8").strip())
     assert audit["command_executed"] is True
     assert audit["argv"][:4] == [sys.executable, str(cli.resolve()), "symbol", "packet_t"]
+    assert audit["argv"][4:8] == ["--repo", str(repo.resolve()), "--function", "parse_packet"]
+    assert "--max-candidates" not in audit["argv"]
+    assert "--max-snippet-lines" not in audit["argv"]
     assert audit["command"] == shlex.join(audit["argv"])
     assert audit["cwd"] == str(repo.resolve())
     assert "exit code 2" in audit["result"]["error"]

@@ -34,8 +34,10 @@ dependency 头文件、同 basename 头、调用/引用文件和构建文件均�
 }
 ```
 
-`kind` 和 `file` 可省略。控制器执行 kRepo `symbol` 后，在同一个 DSH session 中回填
-结果；模型可以继续查询或返回最终工件。查询结果属于不可信仓库数据，不能作为指令。
+`kind` 和 `file` 可省略。控制器执行 kRepo `symbol` 时自动附加
+`--function <当前目标函数>`，模型不需要也不能覆盖该值；不再传递
+`--max-candidates` 和 `--max-snippet-lines`。结果在同一个 DSH session 中回填，模型可以
+继续查询或返回最终工件。查询结果属于不可信仓库数据，不能作为指令。
 
 ## 安全与预算
 
@@ -50,7 +52,7 @@ dependency 头文件、同 basename 头、调用/引用文件和构建文件均�
 
 查询状态位于 `<run-dir>/krepo-queries/`：
 
-- `queries.jsonl`：追加记录查询参数、结果、时间、是否命中缓存，以及实际执行的
+- `queries.jsonl`：追加记录查询参数（含 controller 注入的目标函数）、结果、时间、是否命中缓存，以及实际执行的
   `command`、`argv`、`cwd`；失败命令同样记录，缓存命中项标记为未执行；
 - `cache/<sha256>.json`：以标准化查询参数为键的结果缓存。
 

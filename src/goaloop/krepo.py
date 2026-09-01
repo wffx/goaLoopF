@@ -53,10 +53,17 @@ class KRepoSymbolQuery:
 class KRepoQueryService:
     """Execute bounded kRepo symbol lookups with durable cache and audit records."""
 
-    def __init__(self, workspace_root: Path, repo_root: Path, audit_root: Path) -> None:
+    def __init__(
+        self,
+        workspace_root: Path,
+        repo_root: Path,
+        audit_root: Path,
+        target_function: str,
+    ) -> None:
         self.workspace_root = workspace_root.resolve()
         self.repo_root = repo_root.resolve()
         self.audit_root = audit_root.resolve()
+        self.target_function = target_function
         self.cache_dir = self.audit_root / "cache"
         self.audit_path = self.audit_root / "queries.jsonl"
 
@@ -67,7 +74,7 @@ class KRepoQueryService:
         on_command: Callable[[list[str]], None] | None = None,
     ) -> dict[str, object]:
         normalized = _validate_symbol_query(query)
-        cache_key = _query_cache_key(normalized)
+        cache_key = _query_cache_key(normalized, self.target_function)
         cache_path = self.cache_dir / f"{cache_key}.json"
         cached = _read_cached_query(cache_path)
         if cached is not None:
@@ -86,6 +93,7 @@ class KRepoQueryService:
                 self.workspace_root,
                 self.repo_root,
                 normalized.symbol,
+                function=self.target_function,
                 kind=normalized.kind,
                 file_filter=normalized.file,
                 on_command=capture_command,
@@ -121,7 +129,12 @@ class KRepoQueryService:
         self.audit_path.parent.mkdir(parents=True, exist_ok=True)
         record = {
             "timestamp": datetime.now(UTC).isoformat(),
-            "query": {"symbol": query.symbol, "kind": query.kind, "file": query.file},
+            "query": {
+                "symbol": query.symbol,
+                "function": self.target_function,
+                "kind": query.kind,
+                "file": query.file,
+            },
             "cache_hit": cache_hit,
             "command_executed": command is not None,
             "command": shlex.join(command) if command is not None else None,
@@ -231,6 +244,7 @@ def query_krepo_symbol(
     repo_root: Path,
     symbol: str,
     *,
+    function: str,
     kind: str | None = None,
     file_filter: str | None = None,
     timeout_seconds: int = KREPO_QUERY_TIMEOUT_SECONDS,
@@ -252,10 +266,8 @@ def query_krepo_symbol(
         query.symbol,
         "--repo",
         str(repo_root.resolve()),
-        "--max-candidates",
-        "6",
-        "--max-snippet-lines",
-        "120",
+        "--function",
+        function,
     ]
     if query.kind is not None:
         command.extend(["--kind", query.kind])
@@ -307,9 +319,14 @@ def _validate_symbol_query(query: KRepoSymbolQuery) -> KRepoSymbolQuery:
     return KRepoSymbolQuery(symbol=symbol, kind=kind, file=file_filter)
 
 
-def _query_cache_key(query: KRepoSymbolQuery) -> str:
+def _query_cache_key(query: KRepoSymbolQuery, target_function: str) -> str:
     payload = json.dumps(
-        {"symbol": query.symbol, "kind": query.kind, "file": query.file},
+        {
+            "symbol": query.symbol,
+            "function": target_function,
+            "kind": query.kind,
+            "file": query.file,
+        },
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),

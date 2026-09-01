@@ -355,6 +355,7 @@ class DeepSeekHarnessDriver:
                 self.workspace_root,
                 preprocess.source_root,
                 self._run_dir / "krepo-queries",
+                preprocess.target_function,
             )
         results: list[dict[str, object]] = []
         for index, query in enumerate(queries, start=1):

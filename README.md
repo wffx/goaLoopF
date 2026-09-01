@@ -102,6 +102,8 @@ dependency 和构建文件内容不进入 `preprocess.json`；模型在 generati
 `krepo_query` 协议查询非函数符号。查询限制为每轮最多 6 次、每次请求最多 3 个，
 结果按 16 KiB 截断、缓存并审计到 run 目录的 `krepo-queries/`。`--debug` 会显示查询命令。
 `krepo-queries/queries.jsonl` 同时保存实际执行的 `command`、`argv` 和 `cwd`，失败查询也会记录。
+generation 阶段的 `symbol` 查询由控制器附加 `--function <目标函数>`，不再传递
+`--max-candidates` 和 `--max-snippet-lines`。
 执行 preprocess kRepo 前，Terminal 会输出完整的 `main.py report ... --format json` 命令。
 
 ## 文档
