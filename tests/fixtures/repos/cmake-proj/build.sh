@@ -8,7 +8,7 @@ clang \
   -fprofile-instr-generate \
   -fcoverage-mapping \
   -Iinclude \
-  src/harness.c \
+  src/harness.cpp \
   src/target.c \
   -o "$output_dir/cmake_fuzzer"
 printf 'GOALOOP_FUZZER=%s\n' "$output_dir/cmake_fuzzer"

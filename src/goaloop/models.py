@@ -97,7 +97,7 @@ class FuzzRunRequest(Contract):
     # fuzzing, so successive runs can reuse a previous run's corpus.
     seed_corpus: Path | None = None
     # Optional trusted build directory. When set, the model only generates
-    # harness.c; the controller copies it to <build_dir>/src/harness.c and runs
+    # harness.c; the controller copies it to <build_dir>/src/harness.cpp and runs
     # <build_dir>/build.sh. The script must announce its executable in output.
     build_dir: Path | None = None
 
@@ -249,7 +249,7 @@ class PreprocessResult(Contract):
     reason: str | None = None
     # Resolved trusted build directory when --build-dir mode is used. Build
     # files stay out of contexts; the model only receives this path and emits
-    # harness.c while the controller invokes the pre-existing build.sh.
+    # harness.c while the controller installs it as src/harness.cpp and invokes build.sh.
     build_dir: Path | None = None
 
     @model_validator(mode="before")

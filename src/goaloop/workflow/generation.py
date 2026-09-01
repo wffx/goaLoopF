@@ -329,7 +329,7 @@ class GenerationMixin:
         build_dir = self.preprocess.build_dir
         assert build_dir is not None
         harness_source = candidate_dir / "harness.c"
-        harness_destination = build_dir / "src" / "harness.c"
+        harness_destination = build_dir / "src" / "harness.cpp"
         shutil.copy2(harness_source, harness_destination)
         self._event(
             "execution:build_harness_copied",

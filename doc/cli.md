@@ -33,7 +33,7 @@ goaloop run --repo repos/<project> --source <dir-or-file> --function <symbol>
 | `--max-context-kb` | `96` | 8–1024，注入每个生成提示词的源码上下文预算（KiB）。这是输入 token 的最大来源：降低它直接压缩每次模型输入（96 KiB ≈ 25–32K token） |
 | `--max-input-tokens` | Profile 值 | 输入窗口守卫：生成前估算提示词 token，超过该值 90% 时快速失败并给出可操作报错，而不是等端点返回晦涩的“输入超限”错误。默认取模型 Profile 的 `max_input_tokens` |
 | `--seed-corpus` | — | 可选：目录，其中的种子输入复制进 run corpus（跨 run 复用上一轮语料） |
-| `--build-dir` | — | 可选：可信构建目录（含 `build.sh` 和 `src/`）。控制器复制模型生成的 `harness.c` 后直接运行脚本，并从输出识别可执行文件 |
+| `--build-dir` | — | 可选：可信构建目录（含 `build.sh` 和 `src/`）。控制器把模型生成的 `harness.c` 覆盖复制为 `src/harness.cpp` 后运行脚本，并从输出识别可执行文件 |
 | `--model-name` | Profile 值 | 覆盖模型 ID（如 `gpt-4o`、`deepseek-v4-pro`） |
 | `--base-url` | Profile 值 | 覆盖模型端点（deepseek 适配器生效） |
 | `--api-key` | 环境变量 | 覆盖模型凭据（注入 Profile 的 `api_key_env`，仅本次进程生效，不落盘） |
@@ -298,7 +298,8 @@ goaloop run --repo repos/<project> --source src/target.c --function <symbol> --b
 
 1. build-dir 专用生成契约只允许模型返回一个 `harness.c`，禁止 Makefile、脚本、
    stub 或额外源文件。
-2. 控制器覆盖复制到 `<build-dir>/src/harness.c`。
+2. 控制器覆盖复制到 `<build-dir>/src/harness.cpp`；已存在的同名文件会被替换。生成内容
+   必须可按 C++ 编译，libFuzzer 入口使用 `extern "C"`，C 目标声明同样保持 C linkage。
 3. 控制器以 `<build-dir>` 为工作目录执行 `sh <build-dir>/build.sh`。
 4. 控制器解析构建输出中的 `GOALOOP_FUZZER=<path>`、`executable:`、`binary:` 或
    编译命令 `-o <path>`，只接受实际存在且可执行的文件。
@@ -313,6 +314,9 @@ goaloop run --repo repos/<project> --source src/target.c --function <symbol> --b
   工程路径——构建知识完全由 `--build-dir` 工程承载，模型无需（也无法）猜测。
 - `build.sh` 应自行添加 libFuzzer、ASan/UBSan 和 LLVM coverage 插桩参数，并在成功后
   输出 `GOALOOP_FUZZER=<path>`；构建标准输出完整保存到 run 的 `logs/`。
+- 控制器额外提供 `GOALOOP_HARNESS`、`GOALOOP_RUN_DIR`、`GOALOOP_LOOP` 环境变量，分别
+  表示安装后的 harness 路径、当前 run 目录和生成轮次。它们只是可选提示，不是脚本接口
+  的硬性要求；现有 `build.sh` 不读取它们也能正常执行。
 - 可执行文件可以位于其他构建输出目录；目录内普通日志 token 不会被当成外部产物，
   外部路径必须通过明确标记或 `-o` 输出声明。
 - `build.sh` 是用户提供的可信脚本；**要求 `sandbox.required = false`**。

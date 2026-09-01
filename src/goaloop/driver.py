@@ -103,9 +103,12 @@ BUILD_DIR_CONTRACT = """Build-directory mode is active. Apply these additional r
 - Do not generate Makefile, build.sh, endpoint.json, README, stub sources, or any other file.
 - endpoint_plan.build.harness_file must be harness.c.
 - target_sources, include_dirs, defines, cflags, ldflags, and libraries must all be empty arrays.
+- The copied file is compiled as C++; declare LLVMFuzzerTestOneInput with extern "C", and use
+  extern "C" for C target declarations when endpoint_plan.language is "c".
 - binary_name is only a schema placeholder; the controller discovers the real executable from
   the trusted build.sh output.
-- The controller copies harness.c to <build-dir>/src/harness.c and directly runs
+- The controller copies harness.c to <build-dir>/src/harness.cpp, overwriting any existing file,
+  and directly runs
   <build-dir>/build.sh. Never invent build commands or bypass product compile/link failures."""
 
 STANDARD_BUILD_CONTRACT = """Standard mode rules:

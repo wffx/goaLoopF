@@ -84,7 +84,10 @@ def run(
     build_dir: Path | None = typer.Option(
         None,
         "--build-dir",
-        help="trusted build directory containing build.sh and src/; copies harness.c then runs build.sh",
+        help=(
+            "trusted build directory containing build.sh and src/; "
+            "copies harness.c to src/harness.cpp then runs build.sh"
+        ),
     ),
     model_name: str | None = typer.Option(
         None, "--model-name", help="override model id (e.g. gpt-4o, deepseek-v4-pro)"

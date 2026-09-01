@@ -240,6 +240,8 @@ class TestPrompt:
         )
         assert "files must contain exactly one entry whose path is harness.c" in prompt
         assert "Do not generate Makefile" in prompt
+        assert "<build-dir>/src/harness.cpp" in prompt
+        assert 'LLVMFuzzerTestOneInput with extern "C"' in prompt
         assert "Never invent build commands" in prompt
 
     def test_retry_prompt_carries_error(self) -> None:

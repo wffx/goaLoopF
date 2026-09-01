@@ -63,7 +63,7 @@ goaloop run --repo /path/to/any/project --source src/parser.c --function <symbol
 示例与 [doc/README.md](doc/README.md)。
 
 **构建目录模式**：用 `--build-dir` 指向含 `build.sh` 和 `src/` 的可信目录。
-模型只生成 `harness.c`；控制器将其复制到 `<build-dir>/src/harness.c`，直接执行
+模型只生成 `harness.c`；控制器将其覆盖复制到 `<build-dir>/src/harness.cpp`，直接执行
 `<build-dir>/build.sh`，并从脚本输出识别实际可执行文件。建议脚本最后输出
 `GOALOOP_FUZZER=<相对或绝对路径>`：
 

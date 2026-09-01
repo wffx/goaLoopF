@@ -51,6 +51,17 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {{
 }}
 """
 
+BUILD_DIR_HARNESS_TEMPLATE = """#include <stdint.h>
+#include <stddef.h>
+
+extern "C" int {function}(const uint8_t *data, size_t size);
+
+extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {{
+    {function}(data, size);
+    return 0;
+}}
+"""
+
 MAKEFILE_CONTENT = "all:\n\tclang -fsanitize=fuzzer,address,undefined -o fuzzer harness.c src.c\n"
 BUILD_SH_CONTENT = "#!/bin/sh\nexit 0\n"
 README_CONTENT = "# Fuzz harness\n\nGenerated artifact for review only.\n"
@@ -108,7 +119,7 @@ def make_artifact_payload(
 
 def make_build_dir_artifact_payload(function: str, *, harness_source: str | None = None) -> dict[str, Any]:
     """Build the one-file artifact contract used with --build-dir."""
-    harness = harness_source or HARNESS_TEMPLATE.format(function=function)
+    harness = harness_source or BUILD_DIR_HARNESS_TEMPLATE.format(function=function)
     return {
         "summary": "build-directory harness",
         "candidate_ready": True,

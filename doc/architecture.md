@@ -168,7 +168,7 @@ FuzzRunRequest ──► preprocess ──► kRepo report（只读 BROWSE.VC.DB
 ## 安全边界
 
 - 模型不能读写文件、执行命令、访问网络、委托子 Agent（Cordis 组合屏蔽）
-- 标准模式不执行模型生成的 shell 脚本（`build.sh`/`Makefile` 仅供审阅，权限 0600），编译命令由 `BuildPlan` 组装；`--build-dir` 模式只生成 `harness.c`，执行的是用户预置的可信 `<build-dir>/build.sh`
+- 标准模式不执行模型生成的 shell 脚本（`build.sh`/`Makefile` 仅供审阅，权限 0600），编译命令由 `BuildPlan` 组装；`--build-dir` 模式只生成 `harness.c`，覆盖安装为 `<build-dir>/src/harness.cpp`，执行的是用户预置的可信 `<build-dir>/build.sh`
 - 源码目录只读（`repos/`），run 产物只在 `work/<project>/runs/<id>/` 下写入
 - 产品 crash 一旦稳定复现，禁止修改 harness 绕过触发条件
 - 日志和模型反馈脱敏（凭据、绝对路径、用户名；`redaction.py`）

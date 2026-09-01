@@ -547,6 +547,7 @@ class TestBuildDirMode:
             Path(__file__).parent / "fixtures" / "repos" / "cmake-proj",
             build_dir,
         )
+        (build_dir / "src" / "harness.cpp").write_text("stale harness\n", encoding="utf-8")
         payload = make_build_dir_artifact_payload("cmake_parse")
         request = _request(workspace_root, source="repos/cmake-proj", function="cmake_parse", loops=2)
         request.build_dir = build_dir
@@ -573,7 +574,9 @@ class TestBuildDirMode:
         execution = json.loads((run_dir / "executions" / "loop-01" / "execution.json").read_text())
         assert execution["coverage"]["target_function_hit"] is True
         assert execution["fuzzer_binary"] == str(run_dir / "build-output" / "cmake_fuzzer")
-        assert (build_dir / "src" / "harness.c").is_file()
+        installed_harness = build_dir / "src" / "harness.cpp"
+        assert "LLVMFuzzerTestOneInput" in installed_harness.read_text(encoding="utf-8")
+        assert "stale harness" not in installed_harness.read_text(encoding="utf-8")
         assert (run_dir / "build-output" / "cmake_fuzzer").is_file()
         assert "GOALOOP_FUZZER=" in (run_dir / "logs" / "build-loop-01.stdout.log").read_text()
 
