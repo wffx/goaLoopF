@@ -14,6 +14,7 @@ from ..models import (
     CrashAnalysisResult,
     ExecutionDisposition,
     GenerationFeedback,
+    OptimizationAnalysis,
     Phase,
     PreprocessResult,
     ResearchMetrics,
@@ -23,7 +24,7 @@ from ..models import (
 from ..optimization import (
     OPTIMIZATION_ANALYSIS_FILENAME,
     OPTIMIZATION_REPORT_FILENAME,
-    analyze_run_optimization,
+    collect_optimization_signals,
     render_optimization_markdown,
 )
 from ..report import (
@@ -179,10 +180,8 @@ class ReportMixin:
         self.state.validation_result_path = "validation.json"
         metrics = self._write_metrics(report_path)
         trace_summary = self.driver.trace_summary()
-        basic_optimization = analyze_run_optimization(
-            state=self.state,
+        optimization_signals = collect_optimization_signals(
             metrics=metrics,
-            reason=reason,
             execution=self.last_execution,
             trace_summary=trace_summary,
         )
@@ -193,7 +192,7 @@ class ReportMixin:
                 metrics=metrics,
                 reason=reason,
                 execution=self.last_execution,
-                basic_analysis=basic_optimization,
+                signals=optimization_signals,
             )
         except Exception as exc:
             model_optimization = None
@@ -202,14 +201,16 @@ class ReportMixin:
             failure_reason = "driver does not provide model-based optimization analysis"
         if model_optimization is None:
             self._event("optimization:failed", {"reason": failure_reason})
-            optimization = basic_optimization.model_copy(
-                update={
-                    "summary": f"工程优化建议生成失败：{failure_reason}",
-                    "suggestions": [],
-                    "generator": "dsh_model",
-                    "generation_status": "failed",
-                    "failure_reason": failure_reason,
-                }
+            optimization = OptimizationAnalysis(
+                run_id=self.state.run_id,
+                final_status=metrics.final_status,
+                trace_summary_path=metrics.dsh_trace_summary_path,
+                summary=f"工程优化建议生成失败：{failure_reason}",
+                signals=optimization_signals,
+                suggestions=[],
+                generator="dsh_model",
+                generation_status="failed",
+                failure_reason=failure_reason,
             )
         else:
             optimization = model_optimization

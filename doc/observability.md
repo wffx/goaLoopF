@@ -45,7 +45,7 @@ generation 的 kRepo 原生查询不再生成自定义事件，而是使用 DSH 
 
 ## 自动优化分析
 
-每个任务进入终态后，goaloop 先用确定性规则整理基础信号，再通过 DSH Python SDK 的独立
+每个任务进入终态后，goaloop 先采集不含建议的客观运行信号，再通过 DSH Python SDK 的独立
 `<run-id>-optimization` session 读取有界的原始 session trace、workflow events、历轮
 execution、kRepo 查询审计和指标，生成：
 

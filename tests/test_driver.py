@@ -26,8 +26,6 @@ from goaloop.models import (
     FuzzRunRequest,
     GenerationFeedback,
     GenerationGoal,
-    OptimizationAnalysis,
-    OptimizationSuggestion,
     PreprocessResult,
     ResearchMetrics,
     RunState,
@@ -69,7 +67,7 @@ def _goal(run_id: str = "run-d", loop: int = 0) -> GenerationGoal:
     )
 
 
-def _optimization_inputs() -> tuple[RunState, ResearchMetrics, OptimizationAnalysis]:
+def _optimization_inputs() -> tuple[RunState, ResearchMetrics, dict[str, int | float | str | bool | None]]:
     state = RunState(
         run_id="run-live",
         project_name="safe",
@@ -90,23 +88,7 @@ def _optimization_inputs() -> tuple[RunState, ResearchMetrics, OptimizationAnaly
         generation_loops_used=2,
         final_status=TerminalStatus.HARNESS_VERIFIED,
     )
-    basic = OptimizationAnalysis(
-        run_id="run-live",
-        final_status=TerminalStatus.HARNESS_VERIFIED,
-        summary="rule summary",
-        suggestions=[
-            OptimizationSuggestion(
-                id="reduce-generation-rework",
-                priority="medium",
-                category="generation",
-                title="reduce rework",
-                evidence=["two generation loops"],
-                recommendation="inspect repeated failures",
-                expected_impact="fewer loops",
-            )
-        ],
-    )
-    return state, metrics, basic
+    return state, metrics, {"generation_loops_used": 2}
 
 
 class TestExtractJson:
@@ -348,7 +330,7 @@ class TestPrompt:
         assert estimate_tokens("abcd") == 1
 
     def test_optimization_prompt_includes_persisted_process_evidence(self, tmp_path) -> None:
-        state, metrics, basic = _optimization_inputs()
+        state, metrics, signals = _optimization_inputs()
         (tmp_path / "logs").mkdir()
         (tmp_path / "logs" / "dsh-trace.jsonl").write_text(
             '{"method":"goaloop.model_call.completed","payload":{"marker":"session-evidence"}}\n',
@@ -363,13 +345,15 @@ class TestPrompt:
             reason="verified",
             execution=None,
             trace_summary={},
-            basic_analysis=basic,
+            signals=signals,
         )
 
         assert "session-evidence" in prompt
         assert "workflow-evidence" in prompt
         assert "at most 3 suggestions" in prompt
         assert "Suggestions require user review" in prompt
+        assert "rule_suggestions" not in prompt
+        assert "reduce-generation-rework" not in prompt
 
 
 class FakeHarness:
@@ -453,7 +437,7 @@ class TestDeepSeekHarnessDriver:
                 }
             ],
         }
-        state, metrics, basic = _optimization_inputs()
+        state, metrics, signals = _optimization_inputs()
         driver = _real_driver()
         driver.configure_run(run_dir=tmp_path / "run")
         harness = FakeHarness([json.dumps(response)])
@@ -464,7 +448,7 @@ class TestDeepSeekHarnessDriver:
             metrics=metrics,
             reason="verified after two loops",
             execution=None,
-            basic_analysis=basic,
+            signals=signals,
         )
 
         assert analysis is not None
@@ -539,9 +523,7 @@ class TestDeepSeekHarnessDriver:
         harness = FakeHarness([json.dumps(_live_payload()), json.dumps(loop2)])
         driver._harness = harness
         driver.generate_artifacts(goal=_goal("run-live"), preprocess=_preprocess("run-live"), feedback=None)
-        driver.generate_artifacts(
-            goal=_goal("run-live", loop=1), preprocess=_preprocess("run-live"), feedback=None
-        )
+        driver.generate_artifacts(goal=_goal("run-live", loop=1), preprocess=_preprocess("run-live"), feedback=None)
         assert [session for _, session in harness.calls] == ["run-live-g01", "run-live-g02"]
 
     def test_retry_shares_loop_session(self) -> None:
@@ -586,7 +568,7 @@ class TestDeepSeekHarnessDriver:
         big = SourceContext(
             path="src/big.c",
             sha256="0" * 64,
-            content=("int safe_parse(const uint8_t *d, size_t s) { return 0; }\n" * 4000)[:96 * 1024],
+            content=("int safe_parse(const uint8_t *d, size_t s) { return 0; }\n" * 4000)[: 96 * 1024],
         )
         preprocess = _preprocess().model_copy(update={"contexts": [big]})
         driver._harness = FakeHarness([json.dumps(_live_payload())])
@@ -777,9 +759,7 @@ class TestTurnErrorExtraction:
         from goaloop.driver import _extract_turn_error
 
         events = [{"type": "turn/end", "data": {"reason": {"kind": "error"}}}]
-        notifications = [
-            SimpleNamespace(method="model/error", payload={"status": 429, "message": "rate limited"})
-        ]
+        notifications = [SimpleNamespace(method="model/error", payload={"status": 429, "message": "rate limited"})]
         detail = _extract_turn_error(events, notifications)
         assert "429" in detail
         assert "rate limited" in detail

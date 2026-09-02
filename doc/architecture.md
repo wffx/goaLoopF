@@ -54,11 +54,11 @@
 `logs/dsh-trace.jsonl`，并同步维护 `logs/dsh-trace-summary.json`。该观察链路不向模型
 新增 Bash、文件、网络或 subagent 权限。
 
-进入终态后，`ReportMixin` 先写入 `research-metrics.json` 并运行确定性基础分析，再通过
+进入终态后，`ReportMixin` 先写入 `research-metrics.json` 并采集不含建议的客观信号，再通过
 DSH Python SDK 启动独立的 `<run-id>-optimization` session。该 session 读取有界的原始
 session trace、workflow events、历轮 execution、kRepo 查询审计、指标和基础信号，最多
-提炼 3 条带本次运行证据的工程建议。模型不可用或严格 JSON 输出持续无效时，报告阶段
-不会被阻塞，但不会输出规则建议；分析产物标记 `generation_status=failed`、记录
+提炼 3 条带本次运行证据的工程建议。本地代码不按终态或阈值生成建议。模型不可用或严格
+JSON 输出持续无效时，报告阶段不会被阻塞，但不会输出替代建议；分析产物标记 `generation_status=failed`、记录
 `failure_reason` 并保持 `suggestions` 为空。优化建议写入
 `optimization-suggestions.json/.md`，与 `report.md` 完全分离。
 

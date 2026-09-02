@@ -1,43 +1,16 @@
-"""Deterministic post-run optimization analysis tests."""
+"""Optimization signal collection and report rendering tests."""
 
 from __future__ import annotations
 
 from datetime import UTC, datetime
 
 from goaloop.models import (
-    FuzzRunRequest,
-    GenerationGoal,
-    OptimizationPriority,
-    Phase,
+    OptimizationAnalysis,
+    OptimizationSuggestion,
     ResearchMetrics,
-    RunState,
     TerminalStatus,
 )
-from goaloop.optimization import analyze_run_optimization, render_optimization_markdown
-
-
-def _state(status: TerminalStatus, *, loops: int = 1, max_loops: int = 3) -> RunState:
-    return RunState(
-        run_id="run-opt",
-        project_name="safe",
-        request=FuzzRunRequest(
-            repo="repos/safe",
-            source=".",
-            function="safe_parse",
-            max_generation_loops=max_loops,
-        ),
-        phase=Phase.CRASH_ANALYSIS_REPORT,
-        generation_loop=loops,
-        terminal_status=status,
-        goal=GenerationGoal(
-            run_id="run-opt",
-            objective="generate a harness",
-            target_function="safe_parse",
-            acceptance_criteria=["compiles"],
-            max_generation_loops=max_loops,
-            current_loop=loops,
-        ),
-    )
+from goaloop.optimization import collect_optimization_signals, render_optimization_markdown
 
 
 def _metrics(
@@ -72,23 +45,19 @@ def _metrics(
     )
 
 
-def test_successful_run_gets_baseline_recommendation() -> None:
-    analysis = analyze_run_optimization(
-        state=_state(TerminalStatus.HARNESS_VERIFIED),
+def test_signal_collection_does_not_generate_suggestions() -> None:
+    signals = collect_optimization_signals(
         metrics=_metrics(TerminalStatus.HARNESS_VERIFIED),
-        reason="candidate satisfied coverage policy",
         execution=None,
         trace_summary={},
     )
 
-    assert [item.id for item in analysis.suggestions] == ["validate-success-baseline"]
-    assert analysis.suggestions[0].priority is OptimizationPriority.LOW
-    assert analysis.trace_summary_path == "logs/dsh-trace-summary.json"
+    assert signals["generation_loops_used"] == 1
+    assert signals["model_call_failures"] == 0
 
 
-def test_failed_generation_prioritizes_output_build_and_rework() -> None:
-    analysis = analyze_run_optimization(
-        state=_state(TerminalStatus.FAILED, loops=3, max_loops=3),
+def test_signal_collection_records_metrics_without_status_rules() -> None:
+    signals = collect_optimization_signals(
         metrics=_metrics(
             TerminalStatus.FAILED,
             loops=3,
@@ -98,72 +67,47 @@ def test_failed_generation_prioritizes_output_build_and_rework() -> None:
             model_call_seconds=280.0,
             estimated_input_tokens=160_000,
         ),
-        reason="model output stayed invalid after the format retry",
         execution=None,
         trace_summary={"methods": {}, "model_calls": {"completed": 3, "failed": 1}},
     )
 
-    ids = [item.id for item in analysis.suggestions]
-    assert ids[:3] == [
-        "improve-first-pass-build-context",
-        "stabilize-model-output",
-        "stabilize-model-provider",
-    ]
-    assert len(ids) <= 3
-    assert analysis.signals["model_call_failures"] == 1
+    assert signals["model_call_failures"] == 1
+    assert signals["average_model_call_seconds"] == 70.0
+    assert signals["average_input_tokens"] == 40_000.0
 
 
 def test_markdown_includes_actionable_content() -> None:
-    analysis = analyze_run_optimization(
-        state=_state(TerminalStatus.BLOCKED, loops=0),
-        metrics=_metrics(
-            TerminalStatus.BLOCKED,
-            loops=0,
-            first_compile_success=None,
-            model_calls=0,
-            estimated_input_tokens=0,
-        ),
-        reason="kRepo database is missing",
-        execution=None,
-        trace_summary={},
+    analysis = OptimizationAnalysis(
+        run_id="run-opt",
+        final_status=TerminalStatus.BLOCKED,
+        summary="模型根据运行证据生成建议。",
+        suggestions=[
+            OptimizationSuggestion(
+                id="inspect-krepo-setup",
+                priority="high",
+                category="environment",
+                title="检查 kRepo 环境",
+                evidence=["kRepo database is missing"],
+                recommendation="检查数据库配置后重新运行。",
+                expected_impact="恢复分析流程。",
+            )
+        ],
     )
 
     markdown = render_optimization_markdown(analysis)
-    assert "恢复运行环境或外部依赖" in markdown
-    assert "goaloop doctor" in markdown
+    assert "检查 kRepo 环境" in markdown
+    assert "检查数据库配置后重新运行" in markdown
 
 
 def test_dominant_phase_is_reported_from_duration_metrics() -> None:
     metrics = _metrics(TerminalStatus.HARNESS_VERIFIED).model_copy(
         update={"phase_durations": {"preprocess": 2.0, "harness_execution": 98.0}}
     )
-    analysis = analyze_run_optimization(
-        state=_state(TerminalStatus.HARNESS_VERIFIED),
+    signals = collect_optimization_signals(
         metrics=metrics,
-        reason="candidate satisfied coverage policy",
         execution=None,
         trace_summary={},
     )
 
-    assert analysis.suggestions[0].id == "focus-dominant-phase"
-    assert analysis.signals["dominant_phase"] == "harness_execution"
-    assert analysis.signals["dominant_phase_share"] == 0.98
-
-
-def test_long_terminal_reason_is_bounded_in_evidence() -> None:
-    analysis = analyze_run_optimization(
-        state=_state(TerminalStatus.BLOCKED, loops=0),
-        metrics=_metrics(
-            TerminalStatus.BLOCKED,
-            loops=0,
-            first_compile_success=None,
-            model_calls=0,
-            estimated_input_tokens=0,
-        ),
-        reason="endpoint failure: " + "x" * 5000,
-        execution=None,
-        trace_summary={},
-    )
-
-    assert len(analysis.suggestions[0].evidence[0]) <= 1000
-    assert analysis.suggestions[0].evidence[0].endswith("…")
+    assert signals["dominant_phase"] == "harness_execution"
+    assert signals["dominant_phase_share"] == 0.98

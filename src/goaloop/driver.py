@@ -147,7 +147,7 @@ class GenerationDriver(Protocol):
         metrics: ResearchMetrics,
         reason: str,
         execution: HarnessExecutionResult | None,
-        basic_analysis: OptimizationAnalysis,
+        signals: dict[str, int | float | str | bool | None],
     ) -> OptimizationAnalysis | None: ...
     def complete_goal(self, *, goal: GenerationGoal, summary: str) -> None: ...
     def close(self) -> None: ...
@@ -247,7 +247,7 @@ class DeepSeekHarnessDriver:
         metrics: ResearchMetrics,
         reason: str,
         execution: HarnessExecutionResult | None,
-        basic_analysis: OptimizationAnalysis,
+        signals: dict[str, int | float | str | bool | None],
     ) -> OptimizationAnalysis | None:
         if self._run_dir is None:
             raise DriverUnavailable("optimization analysis requires a configured run directory")
@@ -258,7 +258,7 @@ class DeepSeekHarnessDriver:
             reason=reason,
             execution=execution,
             trace_summary=self.trace_summary(),
-            basic_analysis=basic_analysis,
+            signals=signals,
         )
         session_id = f"{self.run_id}-optimization"
         first = self._run_prompt(prompt, session_id=session_id)
@@ -276,14 +276,16 @@ class DeepSeekHarnessDriver:
                     "optimization model response remained invalid after the format retry: "
                     f"first_error={exc}; retry_error={retry_exc}"
                 ) from retry_exc
-        return basic_analysis.model_copy(
-            update={
-                "summary": response.summary,
-                "suggestions": response.suggestions,
-                "generator": "dsh_model",
-                "generation_status": "generated",
-                "failure_reason": None,
-            }
+        return OptimizationAnalysis(
+            run_id=state.run_id,
+            final_status=metrics.final_status,
+            trace_summary_path=metrics.dsh_trace_summary_path,
+            summary=response.summary,
+            signals=signals,
+            suggestions=response.suggestions,
+            generator="dsh_model",
+            generation_status="generated",
+            failure_reason=None,
         )
 
     def complete_goal(self, *, goal: GenerationGoal, summary: str) -> None:
@@ -532,9 +534,9 @@ class ScriptedGenerationDriver:
         metrics: ResearchMetrics,
         reason: str,
         execution: HarnessExecutionResult | None,
-        basic_analysis: OptimizationAnalysis,
+        signals: dict[str, int | float | str | bool | None],
     ) -> OptimizationAnalysis | None:
-        del state, metrics, reason, execution, basic_analysis
+        del state, metrics, reason, execution, signals
         return None
 
     def generate_artifacts(
@@ -752,7 +754,7 @@ def build_optimization_prompt(
     reason: str,
     execution: HarnessExecutionResult | None,
     trace_summary: dict[str, Any],
-    basic_analysis: OptimizationAnalysis,
+    signals: dict[str, int | float | str | bool | None],
 ) -> str:
     evidence = {
         "run_state": state.model_dump(mode="json"),
@@ -760,10 +762,7 @@ def build_optimization_prompt(
         "research_metrics": metrics.model_dump(mode="json"),
         "latest_execution": execution.model_dump(mode="json") if execution is not None else None,
         "trace_summary": trace_summary,
-        "basic_analysis": {
-            "signals": basic_analysis.signals,
-            "rule_suggestions": [item.model_dump(mode="json") for item in basic_analysis.suggestions],
-        },
+        "derived_signals": signals,
         "workflow_events_excerpt": _tail_lines(run_dir / "events.jsonl", MAX_OPTIMIZATION_EVENTS_CHARS),
         "dsh_session_trace_excerpt": _filtered_trace_excerpt(
             run_dir / "logs" / "dsh-trace.jsonl",
@@ -807,7 +806,6 @@ Rules:
 - Focus on goaloop engineering improvements, not changes to the tested product.
 - Do not recommend bypassing compilation/linking, generating stubs, weakening validation, or
   automatically changing code. Suggestions require user review before implementation.
-- Avoid repeating the preliminary rule suggestions unless the full process evidence supports them.
 - Allowed category values: {categories}.
 
 Completed run evidence:
