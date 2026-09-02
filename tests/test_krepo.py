@@ -13,9 +13,12 @@ from goaloop.krepo import (
     KRepoError,
     KRepoQueryService,
     KRepoSymbolQuery,
+    execute_krepo_tool_query,
     krepo_cli_path,
+    krepo_tool_binding_path,
     query_krepo_symbol,
     read_krepo_report,
+    write_krepo_tool_binding,
 )
 
 
@@ -271,3 +274,140 @@ def test_query_service_audits_failed_command(tmp_path: Path, monkeypatch: pytest
     assert audit["command"] == shlex.join(audit["argv"])
     assert audit["cwd"] == str(repo.resolve())
     assert "exit code 2" in audit["result"]["error"]
+
+
+def test_native_tool_binding_executes_controller_bound_query(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    repo = workspace / "repo"
+    target = repo / "src" / "packet.c"
+    target.parent.mkdir(parents=True)
+    target.write_text("int parse_packet(void) { return 0; }\n", encoding="utf-8")
+    cli = tmp_path / "native-krepo.py"
+    _write_cli(cli, {"symbol": "packet_t", "candidates": [{"snippet": "typedef int packet_t;"}]})
+    monkeypatch.setenv("GOALOOP_KREPO", str(cli))
+    binding_root = tmp_path / "run" / "krepo-queries" / "bindings"
+    binding = write_krepo_tool_binding(
+        binding_root,
+        run_id="run-native",
+        session_id="run-native-g01",
+        workspace_root=workspace,
+        repo_root=repo,
+        audit_root=tmp_path / "run" / "krepo-queries",
+        target_function="parse_packet",
+        target_file="src/packet.c",
+    )
+
+    result = execute_krepo_tool_query(
+        binding,
+        symbol="packet_t",
+        kind="typedef",
+        repo_root=repo,
+        target_function="parse_packet",
+        target_file="src/packet.c",
+    )
+
+    assert result["ok"] is True
+    assert "typedef int packet_t" in str(result["output"])
+    assert result["cache_hit"] is False
+    assert "--function parse_packet --file src/packet.c" in str(result["command"])
+    audit = json.loads((tmp_path / "run" / "krepo-queries" / "queries.jsonl").read_text(encoding="utf-8"))
+    assert audit["session_id"] == "run-native-g01"
+    assert "round_id" not in audit
+
+
+def test_native_tool_allows_unlimited_session_queries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    repo = workspace / "repo"
+    target = repo / "target.c"
+    target.parent.mkdir(parents=True)
+    target.write_text("int target(void) { return 0; }\n", encoding="utf-8")
+    cli = tmp_path / "unlimited-krepo.py"
+    _write_cli(cli, {"symbol": "LIMIT", "candidates": [{"snippet": "#define LIMIT 8"}]})
+    monkeypatch.setenv("GOALOOP_KREPO", str(cli))
+    binding = write_krepo_tool_binding(
+        tmp_path / "bindings",
+        run_id="run-unlimited",
+        session_id="run-unlimited-g01",
+        workspace_root=workspace,
+        repo_root=repo,
+        audit_root=tmp_path / "audit",
+        target_function="target",
+        target_file="target.c",
+    )
+
+    results = [
+        execute_krepo_tool_query(
+            binding,
+            symbol="LIMIT",
+            kind=None,
+            repo_root=repo,
+            target_function="target",
+            target_file="target.c",
+        )
+        for _ in range(12)
+    ]
+
+    assert all(result["ok"] is True for result in results)
+    assert results[0]["cache_hit"] is False
+    assert all(result["cache_hit"] is True for result in results[1:])
+    audit_lines = (tmp_path / "audit" / "queries.jsonl").read_text(encoding="utf-8").splitlines()
+    assert len(audit_lines) == 12
+    assert not (tmp_path / "audit" / "budgets").exists()
+
+
+def test_native_tool_rejects_arguments_outside_session_binding(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    repo = workspace / "repo"
+    target = repo / "target.c"
+    target.parent.mkdir(parents=True)
+    target.write_text("int target(void) { return 0; }\n", encoding="utf-8")
+    binding = write_krepo_tool_binding(
+        tmp_path / "bindings",
+        run_id="run-bound",
+        session_id="run-bound-g01",
+        workspace_root=workspace,
+        repo_root=repo,
+        audit_root=tmp_path / "audit",
+        target_function="target",
+        target_file="target.c",
+    )
+    with pytest.raises(KRepoError, match="repo does not match"):
+        execute_krepo_tool_query(
+            binding,
+            symbol="LIMIT",
+            kind=None,
+            repo_root=tmp_path,
+            target_function="target",
+            target_file="target.c",
+        )
+    with pytest.raises(KRepoError, match="function does not match"):
+        execute_krepo_tool_query(
+            binding,
+            symbol="LIMIT",
+            kind=None,
+            repo_root=repo,
+            target_function="other",
+            target_file="target.c",
+        )
+    with pytest.raises(KRepoError, match="file does not match"):
+        execute_krepo_tool_query(
+            binding,
+            symbol="LIMIT",
+            kind=None,
+            repo_root=repo,
+            target_function="target",
+            target_file="other.c",
+        )
+
+
+def test_native_tool_binding_filename_is_session_safe(tmp_path: Path) -> None:
+    first = krepo_tool_binding_path(tmp_path, "../../session")
+    second = krepo_tool_binding_path(tmp_path, "session")
+
+    assert first.parent == tmp_path.resolve()
+    assert first != second
+    assert first.suffix == ".json"

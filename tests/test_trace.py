@@ -132,7 +132,7 @@ def test_summary_aggregates_model_and_tool_events(tmp_path: Path) -> None:
     )
     recorder.record(
         "session.event",
-        {"event": {"type": "tool/call", "name": "query_krepo_symbol"}},
+        {"event": {"type": "tool/call", "data": {"name": "query_krepo_symbol"}}},
     )
     recorder.record(
         "session.event",
@@ -147,6 +147,7 @@ def test_summary_aggregates_model_and_tool_events(tmp_path: Path) -> None:
 
     assert summary["event_count"] == 4
     assert summary["tool_calls"] == 1
+    assert summary["tool_call_names"] == {"query_krepo_symbol": 1}
     assert summary["tool_results"] == 1
     assert summary["model_calls"] == {
         "started": 1,

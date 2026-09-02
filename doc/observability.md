@@ -22,7 +22,10 @@ request header/context、完整 prompt 等噪声；reasoning/text 流式 chunk �
 - `goaloop.model_call.started`：session、prompt 字符数和估算输入 token；
 - `goaloop.model_call.completed`：耗时、finish reason、响应字符数、事件数量；
 - `goaloop.model_call.failed`：耗时、异常类型和原始错误；
-- `goaloop.krepo_query.*`：generation 阶段的查询开始、命令和结果状态。
+
+generation 的 kRepo 原生查询不再生成自定义事件，而是使用 DSH 标准
+`tool/call(name=query_krepo_symbol)` 和 `tool/result`。Tool result 首行包含实际执行命令
+或 `cache hit`；完整命令、argv、cwd 和结果继续写入 `krepo-queries/queries.jsonl`。
 
 ## 摘要字段
 
@@ -32,7 +35,7 @@ request header/context、完整 prompt 等噪声；reasoning/text 流式 chunk �
 - 各 notification method 和 `session.event` 类型计数；
 - 模型调用次数、成功/失败、累计耗时；
 - prompt 字符数、估算输入 token、响应字符数、finish reason 分布；
-- 标准 `tool/call` 和 `tool/result` 数量。
+- 标准 `tool/call` 和 `tool/result` 数量，以及按 Tool 名称统计的 `tool_call_names`。
 
 `goaloop evaluate` 会把每个 run 的关键字段写入 `results`，并在 `observability` 中按
 目标函数汇总总量和平均模型耗时/估算输入 token，可直接用于版本间 A/B 对比。
@@ -51,8 +54,9 @@ execution、kRepo 查询审计和指标，生成：
 - `report.md`：保持任务验证报告，不混入工程优化建议。
 
 模型只能根据本次运行证据提出建议，不能修改代码或自动实施；输出使用严格 JSON，并允许
-一次格式修复。模型不可用或持续输出无效时，确定性规则结果作为 fallback，原因写入
-`fallback_reason`，报告阶段继续完成。该分析调用及原始 notification 继续追加到 DSH trace。
+一次格式修复。模型不可用或持续输出无效时，不生成任何替代建议，`generation_status`
+标记为 `failed`、`failure_reason` 记录原因，报告阶段继续完成。该分析调用及原始
+notification 继续追加到 DSH trace。
 Terminal 默认显示建议摘要；`evaluate-results.json` 同时保存每个 run 的建议并按目标函数汇总高频项。
 
 ## 优化使用方式

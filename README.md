@@ -80,13 +80,14 @@ src/goaloop/
 ├── config.py          # 验证/模型 Profile 加载
 ├── preprocess.py      # 源码范围、符号查找、上下文收集、能力探测
 ├── krepo.py           # kRepo 只读适配器（基础报告 + generation 按需符号查询）
+├── krepo_tool_bridge.py # DSH 原生 Tool 到 KRepoQueryService 的窄桥接
 ├── storage.py         # run 目录、原子写入、事件日志、候选物化
 ├── validation.py      # 工件策略、编译/fuzz argv、指标解析、决策
 ├── backend.py         # LocalLinuxBackend：执行、资源限制、可选沙箱
 ├── coverage.py        # profraw 合并、llvm-cov 导出、覆盖归因
 ├── driver.py          # DeepSeek Harness SDK 适配器 + 测试驱动
 ├── crash.py           # 栈归属、输入最小化、独立复现
-├── optimization.py    # 终态指标/trace 基础分析与模型建议 fallback
+├── optimization.py    # 终态指标/trace 基础信号分析
 ├── report.py / redaction.py  # 报告、研究指标、日志脱敏
 ├── workflow/          # 四阶段状态机（controller/generation/report）
 └── cli.py             # run/resume/status/report/evaluate/doctor
@@ -98,14 +99,20 @@ src/goaloop/
 `GOALOOP_KREPO` 指向其他 kRepo 根目录或新版入口脚本 `main.py`。
 适配不依赖 kRepo 的 `schema_version`；只提取 `source`、上下游调用树和
 `param_constraints` 四项业务内容，并写入 `preprocess.json` 的 `contexts`。
-dependency 和构建文件内容不进入 `preprocess.json`；模型在 generation 中通过受控
-`krepo_query` 协议查询非函数符号。查询限制为每轮最多 6 次、每次请求最多 3 个，
-结果按 16 KiB 截断、缓存并审计到 run 目录的 `krepo-queries/`。`--debug` 会显示查询命令。
+dependency 和构建文件内容不进入 `preprocess.json`；模型在 generation 中通过 DSH 原生
+`query_krepo_symbol` Tool 查询非函数符号。Tool Schema 要求 `symbol`、`repo`、`function`
+和 `file`，`kind` 可选；后三项由 prompt 提供并与 Controller session 绑定交叉校验。
+每个 generation session 不限制查询次数。
+结果按 16 KiB 截断、缓存并审计到 run 目录的 `krepo-queries/`。`--debug` 通过标准
+`tool/call`/`tool/result` 显示查询和具体命令。
 `krepo-queries/queries.jsonl` 同时保存实际执行的 `command`、`argv` 和 `cwd`，失败查询也会记录。
-generation 阶段的 `symbol` 查询由控制器固定附加 `--repo <代码仓>`、
+generation 阶段的 `symbol` 查询必须携带 `--repo <代码仓>`、
 `--function <目标函数>` 和 `--file <目标函数实现文件>`，不再传递
 `--max-candidates` 和 `--max-snippet-lines`。
 执行 preprocess kRepo 前，Terminal 会输出完整的 `main.py report ... --format json` 命令。
+原生 Tool 插件位于 `dsh-plugins/krepo-query/index.mjs`；它仅注册固定查询能力，内部通过
+无 shell、固定 argv、白名单环境的 `execFile` 调用 Python 窄桥接，不向模型开放 Bash
+或任意命令执行。
 
 ## 文档
 

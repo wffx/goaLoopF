@@ -66,21 +66,6 @@ class DshTraceTerminalFormatter:
                 f"session={payload.get('session_id')} duration={payload.get('duration_seconds')}s "
                 f"error={payload.get('error_type')}: {_compact_text(str(payload.get('error', '')), 240)}"
             ]
-        if method == "goaloop.krepo_query.started":
-            query = payload.get("query")
-            return [
-                f"kRepo query started round={payload.get('round')} index={payload.get('index')} "
-                f"query={_compact_json(query, 260)}"
-            ]
-        if method == "goaloop.krepo_query.command":
-            argv = payload.get("argv")
-            command = " ".join(str(item) for item in argv) if isinstance(argv, list) else str(argv)
-            return [f"kRepo command {_compact_text(command, 360)}"]
-        if method == "goaloop.krepo_query.completed":
-            return [
-                f"kRepo query completed round={payload.get('round')} index={payload.get('index')} "
-                f"ok={payload.get('ok')}"
-            ]
         return None
 
     def _format_session_event(self, session_id: str, event: dict[str, Any]) -> list[str]:
@@ -387,6 +372,7 @@ def _empty_summary(run_id: str) -> dict[str, Any]:
             "finish_reasons": {},
         },
         "tool_calls": 0,
+        "tool_call_names": {},
         "tool_results": 0,
     }
 
@@ -412,6 +398,9 @@ def _accumulate(summary: dict[str, Any], record: dict[str, Any]) -> None:
             _increment(summary["session_event_types"], event_type)
             if event_type == "tool/call":
                 summary["tool_calls"] = int(summary["tool_calls"]) + 1
+                data = event.get("data")
+                if isinstance(data, dict) and isinstance(data.get("name"), str):
+                    _increment(summary["tool_call_names"], data["name"])
             elif event_type == "tool/result":
                 summary["tool_results"] = int(summary["tool_results"]) + 1
     normalized = method.replace(".", "/")

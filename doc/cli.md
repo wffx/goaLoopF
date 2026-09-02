@@ -113,8 +113,9 @@ suite.json 格式：
 
 `run`、`resume` 和 `evaluate` 在任务进入终态并写完研究指标后，默认通过 DSH Python SDK
 启动独立优化分析 session。模型结合原始 session 记录、workflow events、执行结果、
-kRepo 审计、指标和基础规则信号，最多输出 3 条建议。模型不可用或输出持续无效时自动
-退回确定性规则结果，不阻塞报告。Terminal 会输出建议数量、生成方式和建议内容；
+kRepo 审计、指标和基础规则信号，最多输出 3 条建议。模型不可用或输出持续无效时不会
+生成替代建议，而是标记优化建议生成失败；任务验证报告仍正常完成。Terminal 会输出
+建议数量、生成状态和建议内容；
 run 目录同时生成：
 
 - `optimization-suggestions.json`：机器可读的信号、证据、优先级、建议与预期收益；
@@ -124,8 +125,8 @@ run 目录同时生成：
 基础规则关注输入范围、环境阻断、模型格式失败、首轮编译、重生成轮次、模型调用失败、
 平均调用超过 60 秒、累计估算输入超过 100K token/单次超过 50K token，以及未闭合的
 `tool/call`/`tool/result`；某阶段耗时至少 30 秒且占比达到 70% 时，也会指出主导阶段。
-这些规则主要为模型提供基础信号并作为 fallback；模型必须引用本次运行事实，弱证据时
-可以少于 3 条或不输出建议。即使任务一次成功且没有异常信号，fallback 仍会输出低优先级基线建议。
+这些规则只为模型提供基础信号，不再作为最终建议 fallback。模型必须引用本次运行事实，
+弱证据时可以少于 3 条或不输出建议。模型调用失败时，`suggestions` 保持为空并记录原因。
 `resume` 旧终态 run 时，如果缺少该产物，会自动补生成。
 
 ### 实时 DSH/model trace
@@ -263,13 +264,15 @@ openrouter/xai）+ 手写 OpenAI 兼容网关。自定义网关端点/模型名�
   dependency 头文件、调用/引用文件和构建文件都不再进入 `preprocess.json`。
   调用关系由两棵去重调用树代替。
 - **dependency 按需查询**：generation 模型需要宏、typedef、enum、变量、struct 或
-  union 时，可返回临时 `krepo_query` 请求。控制器仅执行 kRepo `symbol`，仓库边界
-  由 preprocess 绑定；每次最多 3 个、每轮最多 6 个、最多 3 个回合，单结果最多
-  16 KiB。相同请求跨 generation loop/resume 命中持久化缓存，查询与结果记录在
+  union 时，调用 DSH 原生 `query_krepo_symbol(symbol, repo, function, file, kind?)`
+  Tool。`repo`、`function`、`file` 必填并与 preprocess session 绑定校验，`kind` 可选；
+  每个 generation session 不限制查询次数，单结果最多 16 KiB。相同请求跨 generation
+  loop/resume 命中持久化缓存，查询与结果记录在
   `<run-dir>/krepo-queries/queries.jsonl`，其中包含实际 `command`、`argv` 和 `cwd`，
   包括执行失败的命令。实际 `symbol` 命令固定附加 `--repo <代码仓>`、
   `--function <目标函数>` 和 `--file <目标函数实现文件>`，不再传递
-  `--max-candidates`、`--max-snippet-lines`；缓存位于其 `cache/`，`--debug` 同时显示命令。
+  `--max-candidates`、`--max-snippet-lines`；缓存位于其 `cache/`。`--debug` 从标准
+  `tool/call`/`tool/result` 显示符号参数、实际命令和结果摘要。
 - **kRepo 前置条件**：初始化 `tools/kRepo` 子模块，并用 VS Code C/C++ 扩展为
   被测仓生成 `.vscode/BROWSE.VC.DB`。goaloop 只执行只读 `report`/`symbol`，不调用
   `source`/`outgoingFuncs` 等写文件命令。preprocess 执行前 Terminal 会输出完整、

@@ -57,11 +57,12 @@ goaloop run --repo repos/cJSON-1.7.17 --source cJSON.c --function cJSON_Parse --
 | [testing.md](testing.md) | 测试结构、fixture 设计、端到端覆盖 |
 | [context-optimization.md](context-optimization.md) | 已实施：preprocess 基础上下文 + generation 按需 kRepo dependency 查询 |
 | [observability.md](observability.md) | 原始 DSH trace、结构化摘要与离线优化流程 |
-| [todo.md](todo.md) | 待办项：将 kRepo 查询迁移为 DSH 原生 Tool |
+| [todo.md](todo.md) | 设计事项与实施记录 |
 
 ## 关键设计决策速览
 
 - **模型只产出 JSON，不操作文件/命令**：Cordis 组合屏蔽了 Bash、文件编辑、网络、子 Agent 工具；模型通过持久化 goal 管理进度，控制器验证 JSON 合法性后才物化到磁盘。
+- **kRepo 是原生只读 Tool**：`query_krepo_symbol` 要求 `symbol/repo/function/file`，`kind` 可选；后三项与 Controller session 绑定校验，插件内部固定、无 shell 的 bridge 进程不向模型开放。
 - **多模型支持**：默认 DeepSeek 官方适配器；也提供 pi-ai 多 provider 组合
   （`cordis/goaloop.pi-ai.cordis.yml`），可接 OpenAI/Anthropic 等任意模型或
   OpenAI 兼容网关，`model-profiles/*.toml` 声明 provider/model/base_url/
@@ -74,4 +75,4 @@ goaloop run --repo repos/cJSON-1.7.17 --source cJSON.c --function cJSON_Parse --
 - **单次格式修复重试**：JSON 解析或 schema 校验失败仅允许一次携带精确错误信息的重试；再次失败终止本轮生成。
 - **默认终态优化分析**：每个终态 run 都根据 `research-metrics.json`、DSH trace 摘要、
   执行结果和终态原因先形成基础信号，再由独立 DSH session 提炼少量有证据的优化建议；
-  模型不可用或输出无效时退回确定性规则结果。
+  模型不可用或输出无效时标记建议生成失败，不输出替代规则建议。

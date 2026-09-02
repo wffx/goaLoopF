@@ -555,6 +555,10 @@ def _echo_state(state: RunState, *, run_dir: Path) -> None:
 
 def _echo_optimization_suggestions(run_dir: Path) -> None:
     analysis = _read_optimization_analysis(run_dir)
+    if analysis.get("generation_status") == "failed":
+        reason = analysis.get("failure_reason") or "unknown model analysis failure"
+        typer.echo(f"[goaloop] optimization suggestions failed: {reason}")
+        return
     suggestions = analysis.get("suggestions")
     if not isinstance(suggestions, list) or not suggestions:
         return
@@ -750,10 +754,11 @@ def _progress_line(kind: str, payload: dict[str, object]) -> str | None:
         ),
         "report:write_started": f"step=report_write_started status={payload.get('status')}",
         "optimization:started": f"step=optimization_started generator={payload.get('generator')}",
-        "optimization:fallback": f"step=optimization_fallback reason={payload.get('reason')}",
+        "optimization:failed": f"step=optimization_failed reason={payload.get('reason')}",
         "optimization:completed": (
             f"step=optimization_completed suggestions={payload.get('suggestions')} "
-            f"priority={payload.get('highest_priority')} generator={payload.get('generator')} "
+            f"priority={payload.get('highest_priority')} status={payload.get('generation_status')} "
+            f"generator={payload.get('generator')} "
             f"top={payload.get('top_suggestion')}"
         ),
         "report:written": f"step=report_written status={payload.get('status')}",

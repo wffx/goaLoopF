@@ -119,6 +119,25 @@ class TestStatus:
         assert data["run_id"] == run_id
         assert data["terminal_status"] == "harness_verified"
 
+    def test_status_reports_optimization_generation_failure(self, workspace_root: Path) -> None:
+        run_id = "run-cli-optimization-failed"
+        run_dir = _make_run(workspace_root, run_id, terminal=TerminalStatus.HARNESS_VERIFIED)
+        (run_dir / "optimization-suggestions.json").write_text(
+            json.dumps(
+                {
+                    "generation_status": "failed",
+                    "failure_reason": "model response remained invalid",
+                    "suggestions": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        result = runner.invoke(app, ["status", "--run-id", run_id, "--workspace", str(workspace_root)])
+
+        assert result.exit_code == 0
+        assert "optimization suggestions failed: model response remained invalid" in result.output
+
 
 class TestReport:
     def test_missing_run(self, workspace_root: Path) -> None:
@@ -180,7 +199,7 @@ class TestRun:
         assert "phase=preprocess step=started" in result.output
         assert "phase=preprocess step=completed" in result.output
         assert "step=optimization_completed" in result.output
-        assert "修正任务输入与目标符号范围" in result.output
+        assert "step=optimization_failed" in result.output
         run_dirs = list((workspace_root / "work" / "does-not-exist" / "runs").glob("*"))
         assert len(run_dirs) == 1
         assert (run_dirs[0] / "optimization-suggestions.json").is_file()

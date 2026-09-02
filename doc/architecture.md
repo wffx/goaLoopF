@@ -58,7 +58,8 @@
 DSH Python SDK 启动独立的 `<run-id>-optimization` session。该 session 读取有界的原始
 session trace、workflow events、历轮 execution、kRepo 查询审计、指标和基础信号，最多
 提炼 3 条带本次运行证据的工程建议。模型不可用或严格 JSON 输出持续无效时，报告阶段
-不会被阻塞，而是退回确定性规则建议并记录 `fallback_reason`。优化建议写入
+不会被阻塞，但不会输出规则建议；分析产物标记 `generation_status=failed`、记录
+`failure_reason` 并保持 `suggestions` 为空。优化建议写入
 `optimization-suggestions.json/.md`，与 `report.md` 完全分离。
 
 ## 一次候选执行（compile → fuzz → coverage → decide）
@@ -111,11 +112,13 @@ FuzzRunRequest ──► preprocess ──► kRepo report（只读 BROWSE.VC.DB
                                       ▼
                               PreprocessResult ──► driver.generate_artifacts()
                                                           │
-                                         dependency 需要时返回 krepo_query
+                                      dependency 需要时调用原生 Tool
+                                              query_krepo_symbol
                                                           │
-                                      控制器只读 kRepo symbol + 缓存/审计
+                                      Python 窄桥接执行 kRepo symbol
+                                        + 持久化缓存/审计
                                                           │
-                                      结果回填同一 generation session
+                                      标准 tool/result 回填当前 session
                                                           │
                                                           ▼
                                               GeneratedArtifactSet（JSON）
@@ -142,10 +145,19 @@ FuzzRunRequest ──► preprocess ──► kRepo report（只读 BROWSE.VC.DB
 - `sdk-jsonrpc-server`（SDK 通信入口）
 - `llm-deepseek`（模型适配器）
 - `agent-spine-demo`（Agent 核心，屏蔽 Bash/文件/网络/子 Agent 工具）
+- 本地 `goaloop-krepo-query` 插件（注册 `query_krepo_symbol` 原生 Tool）
 - `goal` + `tool-goal`（持久化 same-session goal + 模型工具）
 - `session-persistence-jsonl`（会话持久化）
 
-模型通过 `create_goal`/`get_goal`/`update_goal` 管理生成进度，仅返回结构化 JSON（`GeneratedArtifactSet`）。控制器负责 JSON 提取、schema 验证、防陈旧检查、单次格式修复重试，以及所有文件读写、命令执行和最终完成 goal 的决策。
+模型通过 `create_goal`/`get_goal`/`update_goal` 管理生成进度，通过
+`query_krepo_symbol(symbol, repo, function, file, kind?)` 按需读取非函数依赖，最终仅返回
+结构化 JSON（`GeneratedArtifactSet`）。Controller 为每个 generation session 写入
+repo/function/file 绑定并在 prompt 中提供对应值；插件拒绝与绑定不一致的调用，只负责
+Tool 生命周期和固定、无 shell 的 Python bridge
+进程，Python
+`KRepoQueryService` 继续负责白名单、超时、缓存和审计。查询次数不受 session 限制。
+控制器负责 JSON 提取、
+schema 验证、防陈旧检查、单次格式修复重试，以及所有文件写入、构建执行和最终完成 goal 的决策。
 
 详见 [driver.py](../src/goaloop/driver.py)。
 

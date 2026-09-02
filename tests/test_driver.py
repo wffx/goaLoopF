@@ -46,6 +46,14 @@ def _preprocess(run_id: str = "run-d") -> PreprocessResult:
         source_root="/tmp/ws/repos/safe",
         language="c",
         target_function="safe_parse",
+        contexts=[
+            SourceContext(
+                kind="target_function",
+                path="src/safe.c",
+                sha256="0" * 64,
+                content="int safe_parse(const unsigned char *data, unsigned long size) { return 0; }",
+            )
+        ],
         capability_report=CapabilityReport(platform="Linux", capabilities=[]),
     )
 
@@ -275,9 +283,13 @@ class TestPrompt:
         assert "GeneratedArtifactSet" in prompt
         assert '"run_id"' in prompt
         assert "generation loop 1" in prompt
-        assert '"type":"krepo_query"' in prompt
+        assert '"type":"krepo_query"' not in prompt
+        assert "query_krepo_symbol" in prompt
         assert "non-function dependency" in prompt
-        assert "always binds --repo, --function, and --file" in prompt
+        assert "requires symbol, repo, function, and file; kind is optional" in prompt
+        assert '"function": "safe_parse"' in prompt
+        assert '"file": "src/safe.c"' in prompt
+        assert "There is no per-session query-count limit" in prompt
 
     def test_build_dir_prompt_requires_only_harness(self) -> None:
         preprocess = _preprocess().model_copy(update={"build_dir": "/tmp/ws/repos/safe"})
@@ -461,55 +473,30 @@ class TestDeepSeekHarnessDriver:
         assert harness.calls[0][1] == "run-live-optimization"
         assert "generation_loops_used" in harness.calls[0][0]
 
-    def test_generation_resolves_on_demand_krepo_query_in_same_session(self, tmp_path) -> None:
-        query_request = {
-            "type": "krepo_query",
-            "reason": "need the packet layout",
-            "queries": [{"operation": "symbol", "symbol": "packet_t", "kind": "typedef"}],
-        }
-
-        class FakeQueryService:
-            def query(self, query, *, on_command=None):
-                if on_command is not None:
-                    on_command(["python", "kRepo/main.py", "symbol", query.symbol])
-                return {"ok": True, "output": "typedef struct packet packet_t;"}
-
-        traces: list[tuple[str, dict]] = []
+    def test_generation_writes_native_krepo_binding_for_session(self, tmp_path) -> None:
         driver = _real_driver()
         driver.configure_run(run_dir=tmp_path / "run")
-        driver._krepo_service = FakeQueryService()  # type: ignore[assignment]
-        driver.on_trace = lambda method, payload: traces.append((method, payload))
-        harness = FakeHarness([json.dumps(query_request), json.dumps(_live_payload())])
+        harness = FakeHarness([json.dumps(_live_payload())])
         driver._harness = harness
 
         artifacts = driver.generate_artifacts(goal=_goal(), preprocess=_preprocess(), feedback=None)
 
         assert artifacts.generation_loop == 1
-        assert [session for _, session in harness.calls] == ["run-live-g01", "run-live-g01"]
-        assert "typedef struct packet packet_t" in harness.calls[1][0]
-        assert any(method == "goaloop.krepo_query.command" for method, _ in traces)
+        assert [session for _, session in harness.calls] == ["run-live-g01"]
+        bindings = list((tmp_path / "run" / "krepo-queries" / "bindings").glob("*.json"))
+        assert len(bindings) == 1
+        binding = json.loads(bindings[0].read_text(encoding="utf-8"))
+        assert binding["session_id"] == "run-live-g01"
+        assert binding["target_function"] == "safe_parse"
+        assert binding["target_file"] == "src/safe.c"
 
-    def test_generation_rejects_excess_krepo_queries(self, tmp_path) -> None:
-        query_request = {
-            "type": "krepo_query",
-            "queries": [
-                {"operation": "symbol", "symbol": "ONE"},
-                {"operation": "symbol", "symbol": "TWO"},
-                {"operation": "symbol", "symbol": "THREE"},
-            ],
-        }
-
-        class FakeQueryService:
-            def query(self, query, *, on_command=None):
-                return {"ok": True, "output": query.symbol}
-
+    def test_runtime_environment_exposes_native_krepo_bindings(self, tmp_path) -> None:
         driver = _real_driver()
         driver.configure_run(run_dir=tmp_path / "run")
-        driver._krepo_service = FakeQueryService()  # type: ignore[assignment]
-        driver._harness = FakeHarness([json.dumps(query_request)] * 3)
 
-        with pytest.raises(GenerationFailure, match="query budget"):
-            driver.generate_artifacts(goal=_goal(), preprocess=_preprocess(), feedback=None)
+        environment = driver._runtime_environment()
+
+        assert environment["GOALOOP_KREPO_BINDINGS_DIR"].endswith("krepo-queries/bindings")
 
     def test_streams_sdk_notifications_to_trace_callback(self) -> None:
         traces: list[tuple[str, dict]] = []

@@ -594,8 +594,9 @@ class OptimizationAnalysis(Contract):
     summary: Annotated[str, Field(min_length=1, max_length=1000)]
     signals: dict[str, int | float | str | bool | None] = Field(default_factory=dict)
     suggestions: list[OptimizationSuggestion] = Field(default_factory=list)
-    generator: Literal["dsh_model", "deterministic_fallback"] = "deterministic_fallback"
-    fallback_reason: Annotated[str, Field(max_length=1000)] | None = None
+    generator: Literal["dsh_model"] = "dsh_model"
+    generation_status: Literal["generated", "failed"] = "generated"
+    failure_reason: Annotated[str, Field(max_length=1000)] | None = None
 
 
 class RunState(Contract):

@@ -29,10 +29,10 @@
 | `GeneratedArtifactSet` | 模型响应（每轮） | `files` 4–64 个且路径唯一；`candidate_ready` 必须 `True`；必须携带 `schema_version`/`run_id`/`phase`/`generation_loop` |
 | `GenerationFeedback` | 反馈给模型的执行证据 | `category`、`summary`、`log_excerpt`（已脱敏）、`artifact_hashes` |
 
-generation 可在最终 `GeneratedArtifactSet` 前返回临时 `krepo_query` 对象，请求 kRepo
-`symbol` 查询非函数符号。该对象不是持久化业务契约：控制器校验白名单后执行并在同一
-session 回填结果；`--repo`、`--function`、`--file` 均由 preprocess 上下文绑定，模型
-不能覆盖；每轮最多 3 个查询回合、合计 6 个查询。
+generation 可在最终 `GeneratedArtifactSet` 前调用 DSH 原生 `query_krepo_symbol` Tool
+查询非函数符号。Tool Schema 要求 `symbol`、`repo`、`function`、`file`，`kind` 可选。
+后三项必须使用 prompt 提供的值，并与 Controller 写入当前 session 的绑定交叉校验。
+Python 窄桥接复用 `KRepoQueryService` 持久化缓存和审计；每个 session 不限制查询次数。
 
 ## 执行阶段
 
@@ -58,7 +58,7 @@ session 回填结果；`--repo`、`--function`、`--file` 均由 preprocess 上�
 | `ValidationResult` | 验证结论 | 携带 `status`、`execution`、`crash_analysis`、`report_path` |
 | `ResearchMetrics` | 研究指标导出 | `token_source` 限 `sdk`/`unavailable`；包含阶段耗时、generation loops、格式重试，以及 DSH trace 路径、事件数、模型调用耗时/规模和工具调用计数 |
 | `OptimizationSuggestion` | 单条优化建议 | 固定 `priority`/`category`，必须包含本次运行证据、可审计建议和预期收益 |
-| `OptimizationAnalysis` | 自动优化分析产物 | 绑定 run 终态、指标/trace 路径、基础信号、最多 3 条建议及 `generator`/fallback 原因 |
+| `OptimizationAnalysis` | 自动优化分析产物 | 绑定 run 终态、指标/trace 路径、基础信号、最多 3 条建议及生成状态；模型失败时建议为空并记录原因 |
 
 ## 状态与持久化
 

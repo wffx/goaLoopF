@@ -123,9 +123,10 @@ class TestSafeFixture:
         assert (run_dir / "optimization-suggestions.json").is_file()
         assert (run_dir / "optimization-suggestions.md").is_file()
         optimization = json.loads((run_dir / "optimization-suggestions.json").read_text())
-        assert optimization["suggestions"][0]["id"] == "validate-success-baseline"
-        assert optimization["generator"] == "deterministic_fallback"
-        assert "driver does not provide" in optimization["fallback_reason"]
+        assert optimization["suggestions"] == []
+        assert optimization["generator"] == "dsh_model"
+        assert optimization["generation_status"] == "failed"
+        assert "driver does not provide" in optimization["failure_reason"]
         assert "## Optimization Suggestions" not in (run_dir / "report.md").read_text(encoding="utf-8")
         assert "## Suggestions" in (run_dir / "optimization-suggestions.md").read_text(encoding="utf-8")
         execution = json.loads((run_dir / "executions" / "loop-01" / "execution.json").read_text())
@@ -208,9 +209,8 @@ class TestRegeneration:
         assert state.generation_loop == 2
         run_dir = ArtifactStore(workspace_root, "safe", "run-regen-1").run_dir
         optimization = json.loads((run_dir / "optimization-suggestions.json").read_text())
-        suggestion_ids = {item["id"] for item in optimization["suggestions"]}
-        assert "improve-first-pass-build-context" in suggestion_ids
-        assert "reduce-generation-rework" in suggestion_ids
+        assert optimization["suggestions"] == []
+        assert optimization["generation_status"] == "failed"
         events = (ArtifactStore(workspace_root, "safe", "run-regen-1").run_dir / "events.jsonl").read_text()
         assert "needs_regeneration" in events  # loop 1 evidence was fed back
 
@@ -470,7 +470,8 @@ class TestTerminalPaths:
         run_dir = ArtifactStore(workspace_root, "missing", "run-input-1").run_dir
         assert (run_dir / "report.md").is_file()
         optimization = json.loads((run_dir / "optimization-suggestions.json").read_text())
-        assert optimization["suggestions"][0]["id"] == "fix-input-scope"
+        assert optimization["suggestions"] == []
+        assert optimization["generation_status"] == "failed"
 
     def test_blocked_when_driver_unavailable(self, workspace_root: Path) -> None:
         request = _request(workspace_root, source="repos/safe", function="safe_parse")
@@ -482,7 +483,8 @@ class TestTerminalPaths:
         assert state.terminal_status is TerminalStatus.BLOCKED
         run_dir = ArtifactStore(workspace_root, "safe", "run-blocked-1").run_dir
         optimization = json.loads((run_dir / "optimization-suggestions.json").read_text())
-        assert optimization["suggestions"][0]["id"] == "restore-runtime-prerequisites"
+        assert optimization["suggestions"] == []
+        assert optimization["generation_status"] == "failed"
 
 
 class TestSeedCorpus:

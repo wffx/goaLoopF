@@ -135,7 +135,7 @@ def analyze_run_optimization(
         )
 
     if metrics.first_compile_success is False:
-        krepo_queries = _method_count(trace_summary, "goaloop.krepo_query.started")
+        krepo_queries = _tool_call_count(trace_summary, "query_krepo_symbol")
         recommendation = (
             "将首轮编译错误中稳定的 include、宏和链接参数固化到 Validation Profile；"
             "缺少类型或宏定义时在 generation 早期按需查询 kRepo。"
@@ -317,7 +317,7 @@ def analyze_run_optimization(
             "average_input_tokens": round(average_input_tokens, 2),
             "tool_calls": metrics.tool_calls,
             "tool_results": tool_results,
-            "krepo_queries": _method_count(trace_summary, "goaloop.krepo_query.started"),
+            "krepo_queries": _tool_call_count(trace_summary, "query_krepo_symbol"),
             "dominant_phase": dominant_phase,
             "dominant_phase_seconds": round(dominant_seconds, 6),
             "dominant_phase_share": round(dominant_share, 6),
@@ -336,7 +336,8 @@ def render_optimization_markdown(analysis: OptimizationAnalysis) -> str:
         f"- **source metrics**: `{analysis.source_metrics_path}`",
         f"- **trace summary**: `{analysis.trace_summary_path or 'unavailable'}`",
         f"- **generator**: `{analysis.generator}`",
-        f"- **fallback reason**: {analysis.fallback_reason or '—'}",
+        f"- **generation status**: `{analysis.generation_status}`",
+        f"- **failure reason**: {analysis.failure_reason or '—'}",
         f"- **summary**: {analysis.summary}",
         "",
         "## Signals",
@@ -359,11 +360,11 @@ def render_optimization_markdown(analysis: OptimizationAnalysis) -> str:
     return "\n".join(lines)
 
 
-def _method_count(trace_summary: dict[str, Any], method: str) -> int:
-    methods = trace_summary.get("methods")
-    if not isinstance(methods, dict):
+def _tool_call_count(trace_summary: dict[str, Any], tool_name: str) -> int:
+    tool_names = trace_summary.get("tool_call_names")
+    if not isinstance(tool_names, dict):
         return 0
-    return _int_value(methods.get(method))
+    return _int_value(tool_names.get(tool_name))
 
 
 def _int_value(value: object) -> int:
